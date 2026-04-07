@@ -1,20 +1,20 @@
 {% extends 'base.html' %}
 {% block title %}สร้างงานแข่งขัน{% endblock %}
 {% block content %}
-<div class=\"card form-card\">
+<div class="card form-card">
     <h1>ขั้นที่ 1: สร้างงานแข่งขัน</h1>
-    <form method=\"post\">
+    <form method="post">
         <label>ชื่องานแข่งขัน</label>
-        <input type=\"text\" name=\"title\" required>
+        <input type="text" name="title" required>
 
         <label>รายละเอียด</label>
-        <textarea name=\"description\" rows=\"4\"></textarea>
+        <textarea name="description" rows="4"></textarea>
 
-        <label class=\"inline-check\">
-            <input type=\"checkbox\" name=\"is_open\" checked> เปิดรับสมัครทันที
+        <label class="inline-check">
+            <input type="checkbox" name="is_open" checked> เปิดรับสมัครทันที
         </label>
 
-        <button type=\"submit\">บันทึกและไปเพิ่มอีเวนต์</button>
+        <button type="submit">บันทึกและไปเพิ่มอีเวนต์</button>
     </form>
 </div>
 {% endblock %}

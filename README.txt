@@ -1,1 +1,4 @@
 วิธีใช้งาน\n\n1) แตกไฟล์ zip\n2) เข้าโฟลเดอร์โปรเจกต์\n3) ติดตั้งแพ็กเกจ\npip install -r requirements.txt\n\n4) รัน\npython3 app.py\n\n5) เปิดเว็บ\nhttp://127.0.0.1:8000\n\nแอดมินเริ่มต้น\nusername: admin\npassword: 1234\n
+เพิ่มแล้ว:
+- แก้ไขทัวร์นาเมนต์
+- ลบทัวร์นาเมนต์

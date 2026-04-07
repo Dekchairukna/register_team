@@ -93,6 +93,19 @@ def init_db():
         )
     """)
 
+    # migration: add missing columns for old databases
+    reg_cols = [row[1] for row in c.execute("PRAGMA table_info(registrations)").fetchall()]
+    if "slip_filename" not in reg_cols:
+        c.execute("ALTER TABLE registrations ADD COLUMN slip_filename TEXT")
+    if "notes" not in reg_cols:
+        c.execute("ALTER TABLE registrations ADD COLUMN notes TEXT")
+    if "created_at" not in reg_cols:
+        c.execute("ALTER TABLE registrations ADD COLUMN created_at TEXT")
+
+    member_cols = [row[1] for row in c.execute("PRAGMA table_info(registration_members)").fetchall()]
+    if "idcard_file" not in member_cols:
+        c.execute("ALTER TABLE registration_members ADD COLUMN idcard_file TEXT")
+
     existing = c.execute("SELECT id FROM users WHERE username = ?", ("admin",)).fetchone()
     if not existing:
         c.execute(
@@ -421,6 +434,98 @@ def create_tournament():
     return render_template("create_tournament.html")
 
 
+
+@app.route("/admin/tournament/<int:tournament_id>/edit", methods=["GET", "POST"])
+def edit_tournament(tournament_id):
+    if not is_logged_in():
+        flash("กรุณาเข้าสู่ระบบก่อน")
+        return redirect(url_for("login"))
+
+    conn = get_db()
+    tournament = conn.execute(
+        "SELECT * FROM tournaments WHERE id = ? AND created_by = ?",
+        (tournament_id, session["user_id"])
+    ).fetchone()
+
+    if not tournament:
+        conn.close()
+        flash("ไม่พบงานแข่งขัน")
+        return redirect(url_for("admin_dashboard"))
+
+    if request.method == "POST":
+        title = request.form.get("title", "").strip()
+        description = request.form.get("description", "").strip()
+        is_open = 1 if request.form.get("is_open") == "on" else 0
+
+        if not title:
+            conn.close()
+            flash("กรุณากรอกชื่องานแข่งขัน")
+            return redirect(url_for("edit_tournament", tournament_id=tournament_id))
+
+        conn.execute(
+            "UPDATE tournaments SET title = ?, description = ?, is_open = ? WHERE id = ?",
+            (title, description, is_open, tournament_id)
+        )
+        conn.commit()
+        conn.close()
+
+        flash("แก้ไขทัวร์นาเมนต์เรียบร้อยแล้ว")
+        return redirect(url_for("admin_dashboard"))
+
+    conn.close()
+    return render_template("edit_tournament.html", tournament=tournament)
+
+
+@app.route("/admin/tournament/<int:tournament_id>/delete")
+def delete_tournament(tournament_id):
+    if not is_logged_in():
+        flash("กรุณาเข้าสู่ระบบก่อน")
+        return redirect(url_for("login"))
+
+    conn = get_db()
+    tournament = conn.execute(
+        "SELECT * FROM tournaments WHERE id = ? AND created_by = ?",
+        (tournament_id, session["user_id"])
+    ).fetchone()
+
+    if not tournament:
+        conn.close()
+        flash("ไม่พบงานแข่งขัน")
+        return redirect(url_for("admin_dashboard"))
+
+    events = conn.execute(
+        "SELECT id FROM events WHERE tournament_id = ?",
+        (tournament_id,)
+    ).fetchall()
+
+    for event in events:
+        regs = conn.execute(
+            "SELECT * FROM registrations WHERE event_id = ?",
+            (event["id"],)
+        ).fetchall()
+
+        for reg in regs:
+            members = conn.execute(
+                "SELECT idcard_file FROM registration_members WHERE registration_id = ?",
+                (reg["id"],)
+            ).fetchall()
+            for m in members:
+                idcard_file = m["idcard_file"] if "idcard_file" in m.keys() else ""
+                delete_uploaded_file(idcard_file)
+            slip_filename = reg["slip_filename"] if "slip_filename" in reg.keys() else ""
+            delete_uploaded_file(slip_filename)
+            conn.execute("DELETE FROM registration_members WHERE registration_id = ?", (reg["id"],))
+        conn.execute("DELETE FROM registrations WHERE event_id = ?", (event["id"],))
+
+    conn.execute("DELETE FROM events WHERE tournament_id = ?", (tournament_id,))
+    conn.execute("DELETE FROM tournaments WHERE id = ?", (tournament_id,))
+    conn.commit()
+    conn.close()
+
+    flash("ลบทัวร์นาเมนต์เรียบร้อยแล้ว")
+    return redirect(url_for("admin_dashboard"))
+
+
 @app.route("/admin/tournament/<int:tournament_id>/events")
 def manage_events(tournament_id):
     if not is_logged_in():
@@ -600,12 +705,14 @@ def delete_event(event_id):
         flash("ไม่พบอีเวนต์")
         return redirect(url_for("admin_dashboard"))
 
-    regs = conn.execute("SELECT id, slip_filename FROM registrations WHERE event_id = ?", (event_id,)).fetchall()
+    regs = conn.execute("SELECT * FROM registrations WHERE event_id = ?", (event_id,)).fetchall()
     for reg in regs:
         members = conn.execute("SELECT idcard_file FROM registration_members WHERE registration_id = ?", (reg["id"],)).fetchall()
         for m in members:
-            delete_uploaded_file(m["idcard_file"])
-        delete_uploaded_file(reg["slip_filename"])
+            idcard_file = m["idcard_file"] if "idcard_file" in m.keys() else ""
+            delete_uploaded_file(idcard_file)
+        slip_filename = reg["slip_filename"] if "slip_filename" in reg.keys() else ""
+        delete_uploaded_file(slip_filename)
         conn.execute("DELETE FROM registration_members WHERE registration_id = ?", (reg["id"],))
     conn.execute("DELETE FROM registrations WHERE event_id = ?", (event_id,))
     conn.execute("DELETE FROM events WHERE id = ?", (event_id,))
@@ -705,6 +812,13 @@ def export_event_excel(event_id):
 
     event_name = event_display_name(event)
     for idx, reg in enumerate(regs, start=1):
+        team_name = reg["team_name"] if "team_name" in reg.keys() else ""
+        contact_name = reg["contact_name"] if "contact_name" in reg.keys() else ""
+        phone = reg["phone"] if "phone" in reg.keys() else ""
+        slip_filename = reg["slip_filename"] if "slip_filename" in reg.keys() else ""
+        notes = reg["notes"] if "notes" in reg.keys() else ""
+        created_at = reg["created_at"] if "created_at" in reg.keys() else ""
+
         row = [
             idx,
             event["tournament_title"],
@@ -713,16 +827,19 @@ def export_event_excel(event_id):
             gender_label(event["gender_type"]),
             age_label(event["age_group"]),
             event["fee"],
-            reg["team_name"] or "",
-            reg["contact_name"],
-            reg["phone"],
-            reg["slip_filename"] or "",
-            reg["notes"] or "",
-            reg["created_at"],
+            team_name or "",
+            contact_name or "",
+            phone or "",
+            slip_filename or "",
+            notes or "",
+            created_at or "",
         ]
         members = member_map[reg["id"]]
         for m in members:
-            row.extend([m["member_name"], m["member_idcard"] or "", m["idcard_file"] or ""])
+            member_name = m["member_name"] if "member_name" in m.keys() else ""
+            member_idcard = m["member_idcard"] if "member_idcard" in m.keys() else ""
+            idcard_file_value = m["idcard_file"] if "idcard_file" in m.keys() else ""
+            row.extend([member_name or "", member_idcard or "", idcard_file_value or ""])
         for _ in range(max_members - len(members)):
             row.extend(["", "", ""])
         ws.append(row)
@@ -755,7 +872,7 @@ def delete_registration(registration_id):
 
     conn = get_db()
     row = conn.execute(
-        """SELECT r.id, r.slip_filename, e.tournament_id, t.created_by
+        """SELECT r.*, e.tournament_id, t.created_by
            FROM registrations r
            JOIN events e ON r.event_id = e.id
            JOIN tournaments t ON e.tournament_id = t.id
@@ -773,8 +890,10 @@ def delete_registration(registration_id):
         (registration_id,)
     ).fetchall()
     for m in members:
-        delete_uploaded_file(m["idcard_file"])
-    delete_uploaded_file(row["slip_filename"])
+        idcard_file = m["idcard_file"] if "idcard_file" in m.keys() else ""
+        delete_uploaded_file(idcard_file)
+    slip_filename = row["slip_filename"] if "slip_filename" in row.keys() else ""
+    delete_uploaded_file(slip_filename)
 
     conn.execute("DELETE FROM registration_members WHERE registration_id = ?", (registration_id,))
     conn.execute("DELETE FROM registrations WHERE id = ?", (registration_id,))

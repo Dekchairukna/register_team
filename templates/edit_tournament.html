@@ -1,0 +1,21 @@
+{% extends 'base.html' %}
+{% block title %}แก้ไขทัวร์นาเมนต์{% endblock %}
+{% block content %}
+<div class=\"card form-card\">
+    <h1>แก้ไขทัวร์นาเมนต์</h1>
+    <form method=\"post\">
+        <label>ชื่องานแข่งขัน</label>
+        <input type=\"text\" name=\"title\" value=\"{{ tournament['title'] }}\" required>
+
+        <label>รายละเอียด</label>
+        <textarea name=\"description\" rows=\"4\">{{ tournament['description'] or '' }}</textarea>
+
+        <label class=\"inline-check\">
+            <input type=\"checkbox\" name=\"is_open\" {% if tournament['is_open'] %}checked{% endif %}> เปิดรับสมัคร
+        </label>
+
+        <button type=\"submit\">บันทึกการแก้ไข</button>
+        <a href=\"{{ url_for('manage_events', tournament_id=tournament['id']) }}\" class=\"btn btn-secondary\">กลับ</a>
+    </form>
+</div>
+{% endblock %}

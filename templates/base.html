@@ -1,30 +1,30 @@
 <!doctype html>
-<html lang=\"th\">
+<html lang="th">
 <head>
-    <meta charset=\"utf-8\">
-    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}ระบบงานแข่งขัน{% endblock %}</title>
-    <link rel=\"stylesheet\" href=\"{{ url_for('static', filename='style.css') }}\">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
     <nav>
         <div><strong>🏆 ระบบงานแข่งขัน</strong></div>
         <div>
-            <a href=\"{{ url_for('home') }}\">หน้าหลัก</a>
+            <a href="{{ url_for('home') }}">หน้าหลัก</a>
             {% if session.get('user_id') %}
-                <a href=\"{{ url_for('admin_dashboard') }}\">แดชบอร์ด</a>
-                <a href=\"{{ url_for('logout') }}\">ออกจากระบบ</a>
+                <a href="{{ url_for('admin_dashboard') }}">แดชบอร์ด</a>
+                <a href="{{ url_for('logout') }}">ออกจากระบบ</a>
             {% else %}
-                <a href=\"{{ url_for('login') }}\">ล็อกอินแอดมิน</a>
+                <a href="{{ url_for('login') }}">ล็อกอินแอดมิน</a>
             {% endif %}
         </div>
     </nav>
 
-    <div class=\"container\">
+    <div class="container">
         {% with messages = get_flashed_messages() %}
             {% if messages %}
                 {% for message in messages %}
-                    <div class=\"flash\">{{ message }}</div>
+                    <div class="flash">{{ message }}</div>
                 {% endfor %}
             {% endif %}
         {% endwith %}

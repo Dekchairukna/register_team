@@ -1,52 +1,52 @@
 {% extends 'base.html' %}
 {% block title %}เพิ่มอีเวนต์{% endblock %}
 {% block content %}
-<div class=\"card form-card\">
+<div class="card form-card">
     <h1>เพิ่มอีเวนต์ย่อย</h1>
     <h2>{{ tournament['title'] }}</h2>
 
-    <form method=\"post\">
+    <form method="post">
         <label>ชื่ออีเวนต์ (ถ้าไม่กรอก ระบบจะสร้างจาก ประเภท+เพศ+รุ่น)</label>
-        <input type=\"text\" name=\"event_name\" placeholder=\"เช่น เดี่ยวชายเยาวชน\">
+        <input type="text" name="event_name" placeholder="เช่น เดี่ยวชายเยาวชน">
 
         <label>ประเภท</label>
-        <select name=\"category_type\" id=\"category_type\" onchange=\"toggleTeamSize()\">
-            <option value=\"single\">เดี่ยว</option>
-            <option value=\"pair\">คู่</option>
-            <option value=\"team\">ทีม</option>
+        <select name="category_type" id="category_type" onchange="toggleTeamSize()">
+            <option value="single">เดี่ยว</option>
+            <option value="pair">คู่</option>
+            <option value="team">ทีม</option>
         </select>
 
         <label>เพศ</label>
-        <select name=\"gender_type\">
-            <option value=\"male\">ชาย</option>
-            <option value=\"female\">หญิง</option>
-            <option value=\"mixed\">ผสม</option>
+        <select name="gender_type">
+            <option value="male">ชาย</option>
+            <option value="female">หญิง</option>
+            <option value="mixed">ผสม</option>
         </select>
 
         <label>รุ่น</label>
-        <select name=\"age_group\">
-            <option value=\"youth\">เยาวชน</option>
-            <option value=\"general\">ทั่วไป</option>
-            <option value=\"senior\">อาวุโส</option>
+        <select name="age_group">
+            <option value="youth">เยาวชน</option>
+            <option value="general">ทั่วไป</option>
+            <option value="senior">อาวุโส</option>
         </select>
 
-        <div id=\"team_size_wrap\" style=\"display:none;\">
+        <div id="team_size_wrap" style="display:none;">
             <label>จำนวนสมาชิกต่อทีม</label>
-            <input type=\"number\" name=\"team_size\" min=\"2\" value=\"3\">
+            <input type="number" name="team_size" min="2" value="3">
         </div>
 
         <label>จำนวนที่รับสมัคร</label>
-        <input type=\"number\" name=\"max_slots\" min=\"1\" required>
+        <input type="number" name="max_slots" min="1" required>
 
         <label>ค่าสมัคร (บาท)</label>
-        <input type=\"number\" name=\"fee\" min=\"0\" value=\"0\" required>
+        <input type="number" name="fee" min="0" value="0" required>
 
-        <label class=\"inline-check\">
-            <input type=\"checkbox\" name=\"is_open\" checked> เปิดรับสมัคร
+        <label class="inline-check">
+            <input type="checkbox" name="is_open" checked> เปิดรับสมัคร
         </label>
 
-        <button type=\"submit\">บันทึกอีเวนต์</button>
-        <a href=\"{{ url_for('manage_events', tournament_id=tournament['id']) }}\" class=\"btn btn-secondary\">กลับ</a>
+        <button type="submit">บันทึกอีเวนต์</button>
+        <a href="{{ url_for('manage_events', tournament_id=tournament['id']) }}" class="btn btn-secondary">กลับ</a>
     </form>
 </div>
 

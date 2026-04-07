@@ -1,54 +1,54 @@
 {% extends 'base.html' %}
 {% block title %}สมัครอีเวนต์{% endblock %}
 {% block content %}
-<div class=\"card\">
+<div class="card">
     <h1>{{ tournament['title'] }}</h1>
     <h2>{{ event_display_name(event) }}</h2>
-    <div class=\"count-box\">
-        <div class=\"count-item\">ประเภท {{ category_label(event['category_type']) }}</div>
-        <div class=\"count-item\">เพศ {{ gender_label(event['gender_type']) }}</div>
-        <div class=\"count-item\">รุ่น {{ age_label(event['age_group']) }}</div>
-        <div class=\"count-item\">ค่าสมัคร {{ event['fee'] }} บาท</div>
-        <div class=\"count-item\">รับ {{ event['max_slots'] }}</div>
-        <div class=\"count-item\">สมัครแล้ว {{ reg_count }}</div>
+    <div class="count-box">
+        <div class="count-item">ประเภท {{ category_label(event['category_type']) }}</div>
+        <div class="count-item">เพศ {{ gender_label(event['gender_type']) }}</div>
+        <div class="count-item">รุ่น {{ age_label(event['age_group']) }}</div>
+        <div class="count-item">ค่าสมัคร {{ event['fee'] }} บาท</div>
+        <div class="count-item">รับ {{ event['max_slots'] }}</div>
+        <div class="count-item">สมัครแล้ว {{ reg_count }}</div>
     </div>
-    <p class=\"upload-note\">รองรับสลิปและบัตรประชาชน: JPG, PNG, WEBP, PDF</p>
+    <p class="upload-note">รองรับสลิปและบัตรประชาชน: JPG, PNG, WEBP, PDF</p>
 </div>
 
-<div class=\"card\">
-    <form method=\"post\" enctype=\"multipart/form-data\">
+<div class="card">
+    <form method="post" enctype="multipart/form-data">
         {% if event['category_type'] == 'team' %}
             <label>ชื่อทีม</label>
-            <input type=\"text\" name=\"team_name\" required>
+            <input type="text" name="team_name" required>
         {% endif %}
 
         <label>ชื่อผู้ติดต่อ</label>
-        <input type=\"text\" name=\"contact_name\" required>
+        <input type="text" name="contact_name" required>
 
         <label>เบอร์โทร</label>
-        <input type=\"text\" name=\"phone\" required>
+        <input type="text" name="phone" required>
 
         <label>แนบสลิปค่าสมัคร</label>
-        <input type=\"file\" name=\"slip_file\" accept=\".jpg,.jpeg,.png,.webp,.pdf\">
+        <input type="file" name="slip_file" accept=".jpg,.jpeg,.png,.webp,.pdf">
 
         {% for i in range(1, member_count + 1) %}
             <hr>
             <h3>สมาชิกคนที่ {{ i }}</h3>
             <label>ชื่อ-สกุล</label>
-            <input type=\"text\" name=\"member_name_{{ i }}\" required>
+            <input type="text" name="member_name_{{ i }}" required>
 
             <label>เลขบัตรประชาชน</label>
-            <input type=\"text\" name=\"member_idcard_{{ i }}\">
+            <input type="text" name="member_idcard_{{ i }}">
 
             <label>อัปโหลดบัตรประชาชน</label>
-            <input type=\"file\" name=\"idcard_file_{{ i }}\" accept=\".jpg,.jpeg,.png,.webp,.pdf\">
+            <input type="file" name="idcard_file_{{ i }}" accept=".jpg,.jpeg,.png,.webp,.pdf">
         {% endfor %}
 
         <label>หมายเหตุ</label>
-        <textarea name=\"notes\" rows=\"3\"></textarea>
+        <textarea name="notes" rows="3"></textarea>
 
-        <button type=\"submit\">ยืนยันการสมัคร</button>
-        <a href=\"{{ url_for('home') }}\" class=\"btn btn-secondary\">กลับหน้าหลัก</a>
+        <button type="submit">ยืนยันการสมัคร</button>
+        <a href="{{ url_for('home') }}" class="btn btn-secondary">กลับหน้าหลัก</a>
     </form>
 </div>
 {% endblock %}
