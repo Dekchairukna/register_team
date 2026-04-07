@@ -1,0 +1,61 @@
+{% extends 'base.html' %}
+{% block title %}แก้ไขอีเวนต์{% endblock %}
+{% block content %}
+<div class="card form-card">
+    <h1>แก้ไขอีเวนต์</h1>
+    <h2>{{ tournament['title'] }}</h2>
+
+    <form method="post">
+        <label>ชื่ออีเวนต์</label>
+        <input type="text" name="event_name" value="{{ event['event_name'] or '' }}">
+
+        <label>ประเภท</label>
+        <select name="category_type" id="category_type" onchange="toggleTeamSize()">
+            <option value="single" {% if event['category_type'] == 'single' %}selected{% endif %}>เดี่ยว</option>
+            <option value="pair" {% if event['category_type'] == 'pair' %}selected{% endif %}>คู่</option>
+            <option value="team" {% if event['category_type'] == 'team' %}selected{% endif %}>ทีม</option>
+        </select>
+
+        <label>เพศ</label>
+        <select name="gender_type">
+            <option value="male" {% if event['gender_type'] == 'male' %}selected{% endif %}>ชาย</option>
+            <option value="female" {% if event['gender_type'] == 'female' %}selected{% endif %}>หญิง</option>
+            <option value="mixed" {% if event['gender_type'] == 'mixed' %}selected{% endif %}>ผสม</option>
+        </select>
+
+        <label>รุ่น</label>
+        <select name="age_group">
+            <option value="youth" {% if event['age_group'] == 'youth' %}selected{% endif %}>เยาวชน</option>
+            <option value="general" {% if event['age_group'] == 'general' %}selected{% endif %}>ทั่วไป</option>
+            <option value="senior" {% if event['age_group'] == 'senior' %}selected{% endif %}>อาวุโส</option>
+        </select>
+
+        <div id="team_size_wrap" style="display:none;">
+            <label>จำนวนสมาชิกต่อทีม</label>
+            <input type="number" name="team_size" min="2" value="{{ event['team_size'] }}">
+        </div>
+
+        <label>จำนวนที่รับสมัคร</label>
+        <input type="number" name="max_slots" min="1" value="{{ event['max_slots'] }}" required>
+
+        <label>ค่าสมัคร (บาท)</label>
+        <input type="number" name="fee" min="0" value="{{ event['fee'] }}" required>
+
+        <label class="inline-check">
+            <input type="checkbox" name="is_open" {% if event['is_open'] %}checked{% endif %}> เปิดรับสมัคร
+        </label>
+
+        <button type="submit">บันทึกการแก้ไข</button>
+        <a href="{{ url_for('manage_events', tournament_id=tournament['id']) }}" class="btn btn-secondary">กลับ</a>
+    </form>
+</div>
+
+<script>
+function toggleTeamSize() {
+    const type = document.getElementById('category_type').value;
+    const wrap = document.getElementById('team_size_wrap');
+    wrap.style.display = type === 'team' ? 'block' : 'none';
+}
+toggleTeamSize();
+</script>
+{% endblock %}

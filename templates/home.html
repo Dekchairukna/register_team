@@ -1,0 +1,48 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="card">
+    <h1>งานแข่งขันที่เปิดรับสมัคร</h1>
+    <p class="muted">เลือกงาน แล้วเลือกอีเวนต์ย่อยที่ต้องการสมัครได้เลย</p>
+</div>
+
+{% for t in tournaments %}
+<div class="card">
+    <h2>{{ t['title'] }}</h2>
+    <p>{{ t['description'] or '-' }}</p>
+    <p><strong>สถานะ:</strong> {{ 'เปิดรับสมัคร' if t['is_open'] else 'ปิดรับสมัคร' }}</p>
+
+    <table>
+        <thead>
+            <tr>
+                <th>อีเวนต์</th>
+                <th>ประเภท</th>
+                <th>เพศ</th>
+                <th>รุ่น</th>
+                <th>ค่าสมัคร</th>
+                <th>รับ</th>
+                <th>สมัครแล้ว</th>
+                <th>สมัคร</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for e in event_map[t['id']] %}
+            <tr>
+                <td>{{ event_display_name(e) }}</td>
+                <td>{{ category_label(e['category_type']) }}</td>
+                <td>{{ gender_label(e['gender_type']) }}</td>
+                <td>{{ age_label(e['age_group']) }}</td>
+                <td>{{ e['fee'] }} บาท</td>
+                <td>{{ e['max_slots'] }}</td>
+                <td>{{ count_map[t['id']][e['id']] }}</td>
+                <td><a class="btn" href="{{ url_for('register_event', event_id=e['id']) }}">สมัคร</a></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="8">ยังไม่มีอีเวนต์</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="card">ยังไม่มีงานแข่งขัน</div>
+{% endfor %}
+{% endblock %}

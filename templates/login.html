@@ -1,0 +1,15 @@
+{% extends 'base.html' %}
+{% block title %}ล็อกอินแอดมิน{% endblock %}
+{% block content %}
+<div class="card auth-card">
+    <h1>ล็อกอินแอดมิน</h1>
+    <p class="muted"></p>
+    <form method="post">
+        <label>ชื่อผู้ใช้</label>
+        <input type="text" name="username" required>
+        <label>รหัสผ่าน</label>
+        <input type="password" name="password" required>
+        <button type="submit">เข้าสู่ระบบ</button>
+    </form>
+</div>
+{% endblock %}
