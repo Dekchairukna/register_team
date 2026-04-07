@@ -35,6 +35,8 @@
     <div class="row-actions">
         <a class="btn" href="{{ url_for('manage_events', tournament_id=t['id']) }}">จัดการอีเวนต์</a>
         <a class="btn btn-secondary" href="{{ url_for('tournament_registrations', tournament_id=t['id']) }}">ดูผู้สมัครทั้งหมด</a>
+        <a class="btn btn-secondary" href="{{ url_for('edit_tournament', tournament_id=t['id']) }}">แก้ไขงานแข่งขัน</a>
+        <a class="btn btn-danger" href="{{ url_for('delete_tournament', tournament_id=t['id']) }}" onclick="return confirm('ลบงานแข่งขันนี้ทั้งหมด? ระบบจะลบอีเวนต์ รายชื่อสมัคร และไฟล์แนบทั้งหมดถาวร')">ลบงานแข่งขัน</a>
     </div>
 
     <table style="margin-top:14px;">

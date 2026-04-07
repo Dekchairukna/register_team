@@ -73,7 +73,7 @@
                 <td>{{ m['member_name'] }}</td>
                 <td>{{ m['member_idcard'] or '-' }}</td>
                 <td>
-                    {% if 'idcard_file' in m.keys() and m['idcard_file'] %}
+                    {% if m['idcard_file'] %}
                         <a href="{{ url_for('uploaded_file', filename=m['idcard_file']) }}" target="_blank">เปิดดูไฟล์</a>
                     {% else %}
                         -
