@@ -1,33 +1,59 @@
 {% extends 'base.html' %}
 {% block title %}ผู้สมัครทั้งหมด{% endblock %}
 {% block content %}
-<div class="card">
+<div class=\"card\">
     <h1>ผู้สมัครทั้งหมด</h1>
     <h2>{{ tournament['title'] }}</h2>
-    <a href="{{ url_for('manage_events', tournament_id=tournament['id']) }}" class="btn btn-secondary">กลับไปจัดการอีเวนต์</a>
+    <a href=\"{{ url_for('manage_events', tournament_id=tournament['id']) }}\" class=\"btn btn-secondary\">กลับไปจัดการอีเวนต์</a>
+</div>
+
+<div class=\"card\">
+    <h3>ตารางสรุปรายชื่อแต่ละประเภท</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>อีเวนต์</th>
+                <th>สมัครแล้ว</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in summary_rows %}
+            <tr>
+                <td>{{ event_display_name(row['event']) }}</td>
+                <td>{{ row['count'] }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan=\"2\">ยังไม่มีข้อมูล</td></tr>
+            {% endfor %}
+            <tr class=\"summary-total\">
+                <td>รวมทั้งหมด</td>
+                <td>{{ total_regs }}</td>
+            </tr>
+        </tbody>
+    </table>
 </div>
 
 {% for row in rows %}
-<div class="card">
-    <div class="row-actions spread">
+<div class=\"card\">
+    <div class=\"row-actions spread\">
         <div>
             <h3>{{ row['team_name'] or 'ไม่มีชื่อทีม' }}</h3>
             <p><strong>อีเวนต์:</strong> {{ row['event_name'] or category_label(row['category_type']) ~ ' ' ~ gender_label(row['gender_type']) ~ ' ' ~ age_label(row['age_group']) }}</p>
             <p><strong>ค่าสมัคร:</strong> {{ row['fee'] }} บาท</p>
             <p><strong>ผู้ติดต่อ:</strong> {{ row['contact_name'] }} | <strong>โทร:</strong> {{ row['phone'] }}</p>
             <p><strong>หมายเหตุ:</strong> {{ row['notes'] or '-' }}</p>
-            <p class="muted">สมัครเมื่อ {{ row['created_at'] }}</p>
+            <p class=\"muted\">สมัครเมื่อ {{ row['created_at'] }}</p>
             <p>
                 <strong>สลิป:</strong>
                 {% if row['slip_filename'] %}
-                    <a href="{{ url_for('uploaded_file', filename=row['slip_filename']) }}" target="_blank">เปิดดูสลิป</a>
+                    <a href=\"{{ url_for('uploaded_file', filename=row['slip_filename']) }}\" target=\"_blank\">เปิดดูสลิป</a>
                 {% else %}
                     ไม่มีแนบ
                 {% endif %}
             </p>
         </div>
         <div>
-            <a class="btn btn-danger" href="{{ url_for('delete_registration', registration_id=row['id']) }}" onclick="return confirm('ลบผู้สมัครนี้?')">ลบ</a>
+            <a class=\"btn btn-danger\" href=\"{{ url_for('delete_registration', registration_id=row['id']) }}\" onclick=\"return confirm('ลบผู้สมัครนี้?')\">ลบ</a>
         </div>
     </div>
 
@@ -37,6 +63,7 @@
                 <th>#</th>
                 <th>ชื่อสมาชิก</th>
                 <th>เลขบัตรประชาชน</th>
+                <th>ไฟล์บัตรประชาชน</th>
             </tr>
         </thead>
         <tbody>
@@ -45,12 +72,19 @@
                 <td>{{ loop.index }}</td>
                 <td>{{ m['member_name'] }}</td>
                 <td>{{ m['member_idcard'] or '-' }}</td>
+                <td>
+                    {% if m['idcard_file'] %}
+                        <a href=\"{{ url_for('uploaded_file', filename=m['idcard_file']) }}\" target=\"_blank\">เปิดดูไฟล์</a>
+                    {% else %}
+                        -
+                    {% endif %}
+                </td>
             </tr>
             {% endfor %}
         </tbody>
     </table>
 </div>
 {% else %}
-<div class="card">ยังไม่มีผู้สมัคร</div>
+<div class=\"card\">ยังไม่มีผู้สมัคร</div>
 {% endfor %}
 {% endblock %}

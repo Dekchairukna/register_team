@@ -1,12 +1,12 @@
 {% extends 'base.html' %}
 {% block content %}
-<div class="card">
+<div class=\"card\">
     <h1>งานแข่งขันที่เปิดรับสมัคร</h1>
-    <p class="muted">เลือกงาน แล้วเลือกอีเวนต์ย่อยที่ต้องการสมัครได้เลย</p>
+    <p class=\"muted\">เลือกงาน แล้วเลือกอีเวนต์ย่อยที่ต้องการสมัครได้เลย</p>
 </div>
 
 {% for t in tournaments %}
-<div class="card">
+<div class=\"card\">
     <h2>{{ t['title'] }}</h2>
     <p>{{ t['description'] or '-' }}</p>
     <p><strong>สถานะ:</strong> {{ 'เปิดรับสมัคร' if t['is_open'] else 'ปิดรับสมัคร' }}</p>
@@ -34,15 +34,15 @@
                 <td>{{ e['fee'] }} บาท</td>
                 <td>{{ e['max_slots'] }}</td>
                 <td>{{ count_map[t['id']][e['id']] }}</td>
-                <td><a class="btn" href="{{ url_for('register_event', event_id=e['id']) }}">สมัคร</a></td>
+                <td><a class=\"btn\" href=\"{{ url_for('register_event', event_id=e['id']) }}\">สมัคร</a></td>
             </tr>
             {% else %}
-            <tr><td colspan="8">ยังไม่มีอีเวนต์</td></tr>
+            <tr><td colspan=\"8\">ยังไม่มีอีเวนต์</td></tr>
             {% endfor %}
         </tbody>
     </table>
 </div>
 {% else %}
-<div class="card">ยังไม่มีงานแข่งขัน</div>
+<div class=\"card\">ยังไม่มีงานแข่งขัน</div>
 {% endfor %}
 {% endblock %}

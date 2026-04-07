@@ -1,53 +1,68 @@
 {% extends 'base.html' %}
 {% block title %}แดชบอร์ดแอดมิน{% endblock %}
 {% block content %}
-<div class="card">
+<div class=\"grid four-col\">
+    <div class=\"card stat-card\">
+        <div class=\"stat-label\">งานแข่งขัน</div>
+        <div class=\"stat-number\">{{ dashboard['tournaments'] }}</div>
+    </div>
+    <div class=\"card stat-card\">
+        <div class=\"stat-label\">อีเวนต์ทั้งหมด</div>
+        <div class=\"stat-number\">{{ dashboard['events'] }}</div>
+    </div>
+    <div class=\"card stat-card\">
+        <div class=\"stat-label\">ผู้สมัครทั้งหมด</div>
+        <div class=\"stat-number\">{{ dashboard['registrations'] }}</div>
+    </div>
+    <div class=\"card stat-card\">
+        <div class=\"stat-label\">อีเวนต์ที่เปิดรับ</div>
+        <div class=\"stat-number\">{{ dashboard['open_events'] }}</div>
+    </div>
+</div>
+
+<div class=\"card\">
     <h1>แดชบอร์ดแอดมิน</h1>
-    <p class="muted">ยินดีต้อนรับ {{ session['username'] }}</p>
-    <div class="row-actions">
-        <a class="btn btn-success" href="{{ url_for('create_tournament') }}">+ สร้างงานแข่งขัน</a>
+    <p class=\"muted\">ยินดีต้อนรับ {{ session['username'] }}</p>
+    <div class=\"row-actions\">
+        <a class=\"btn btn-success\" href=\"{{ url_for('create_tournament') }}\">+ สร้างงานแข่งขัน</a>
     </div>
 </div>
 
 {% for t in tournaments %}
-<div class="card">
+<div class=\"card\">
     <h2>{{ t['title'] }}</h2>
     <p>{{ t['description'] or '-' }}</p>
-    <div class="row-actions">
-        <a class="btn" href="{{ url_for('manage_events', tournament_id=t['id']) }}">จัดการอีเวนต์</a>
-        <a class="btn btn-secondary" href="{{ url_for('tournament_registrations', tournament_id=t['id']) }}">ดูผู้สมัครทั้งหมด</a>
+    <div class=\"row-actions\">
+        <a class=\"btn\" href=\"{{ url_for('manage_events', tournament_id=t['id']) }}\">จัดการอีเวนต์</a>
+        <a class=\"btn btn-secondary\" href=\"{{ url_for('tournament_registrations', tournament_id=t['id']) }}\">ดูผู้สมัครทั้งหมด</a>
     </div>
 
-    <table style="margin-top:14px;">
+    <table style=\"margin-top:14px;\">
         <thead>
             <tr>
                 <th>อีเวนต์</th>
-                <th>ประเภท</th>
-                <th>เพศ</th>
-                <th>รุ่น</th>
                 <th>ค่าสมัคร</th>
                 <th>รับ</th>
                 <th>สมัครแล้ว</th>
+                <th>Excel</th>
             </tr>
         </thead>
         <tbody>
             {% for e in event_map[t['id']] %}
             <tr>
                 <td>{{ event_display_name(e) }}</td>
-                <td>{{ category_label(e['category_type']) }}</td>
-                <td>{{ gender_label(e['gender_type']) }}</td>
-                <td>{{ age_label(e['age_group']) }}</td>
                 <td>{{ e['fee'] }} บาท</td>
                 <td>{{ e['max_slots'] }}</td>
                 <td>{{ count_map[t['id']][e['id']] }}</td>
+                <td><a class=\"btn\" href=\"{{ url_for('export_event_excel', event_id=e['id']) }}\">ดาวน์โหลด</a></td>
             </tr>
             {% else %}
-            <tr><td colspan="7">ยังไม่มีอีเวนต์</td></tr>
+            <tr><td colspan=\"5\">ยังไม่มีอีเวนต์</td></tr>
             {% endfor %}
         </tbody>
     </table>
 </div>
 {% else %}
-<div class="card">ยังไม่มีงานแข่งขัน</div>
+<div class=\"card\">ยังไม่มีงานแข่งขัน</div>
 {% endfor %}
 {% endblock %}

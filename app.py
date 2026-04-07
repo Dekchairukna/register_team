@@ -1,15 +1,15 @@
-from flask import Flask, render_template, request, redirect, url_for, session, flash, send_from_directory
+from flask import Flask, render_template, request, redirect, url_for, session, flash, send_from_directory, send_file
 import sqlite3
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from datetime import datetime
+from io import BytesIO
+import openpyxl
 import os
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.environ.get("DATA_DIR", BASE_DIR)
-
-DB_NAME = os.path.join(DATA_DIR, "tournament_events.db")
-UPLOAD_FOLDER = os.path.join(DATA_DIR, "uploads")
+DB_NAME = os.path.join(BASE_DIR, "tournament_events.db")
+UPLOAD_FOLDER = os.path.join(BASE_DIR, "static", "uploads")
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "pdf", "webp"}
 
 app = Flask(__name__)
@@ -88,6 +88,7 @@ def init_db():
             registration_id INTEGER NOT NULL,
             member_name TEXT NOT NULL,
             member_idcard TEXT,
+            idcard_file TEXT,
             FOREIGN KEY(registration_id) REFERENCES registrations(id)
         )
     """)
@@ -146,6 +147,45 @@ def event_reg_count(event_id):
     ).fetchone()["total"]
     conn.close()
     return total
+
+
+def save_uploaded_file(file_obj, prefix="file"):
+    if not file_obj or not file_obj.filename:
+        return None
+    if not allowed_file(file_obj.filename):
+        return None
+    safe_name = secure_filename(file_obj.filename)
+    ext = safe_name.rsplit(".", 1)[1].lower()
+    filename = f"{prefix}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}.{ext}"
+    file_obj.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
+    return filename
+
+
+def delete_uploaded_file(filename):
+    if not filename:
+        return
+    path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+    if os.path.exists(path):
+        os.remove(path)
+
+
+def registration_summary_by_event(tournament_id):
+    conn = get_db()
+    events = conn.execute(
+        "SELECT * FROM events WHERE tournament_id = ? ORDER BY id ASC",
+        (tournament_id,)
+    ).fetchall()
+    rows = []
+    total = 0
+    for e in events:
+        count = conn.execute(
+            "SELECT COUNT(*) AS total FROM registrations WHERE event_id = ?",
+            (e["id"],)
+        ).fetchone()["total"]
+        total += count
+        rows.append({"event": e, "count": count})
+    conn.close()
+    return rows, total
 
 
 @app.context_processor
@@ -213,8 +253,16 @@ def register_event(event_id):
         for i in range(1, member_count + 1):
             member_name = request.form.get(f"member_name_{i}", "").strip()
             member_idcard = request.form.get(f"member_idcard_{i}", "").strip()
+            member_idcard_file = request.files.get(f"idcard_file_{i}")
+
             if member_name:
-                members.append((member_name, member_idcard))
+                idcard_file_name = None
+                if member_idcard_file and member_idcard_file.filename:
+                    idcard_file_name = save_uploaded_file(member_idcard_file, prefix=f"idcard_{i}")
+                    if not idcard_file_name:
+                        flash("อัปโหลดบัตรประชาชนได้เฉพาะไฟล์ png, jpg, jpeg, webp, pdf")
+                        return redirect(url_for("register_event", event_id=event_id))
+                members.append((member_name, member_idcard, idcard_file_name))
 
         if not contact_name or not phone:
             flash("กรุณากรอกชื่อผู้ติดต่อและเบอร์โทร")
@@ -231,13 +279,10 @@ def register_event(event_id):
         slip_file = request.files.get("slip_file")
         slip_filename = None
         if slip_file and slip_file.filename:
-            if not allowed_file(slip_file.filename):
-                flash("อัปโหลดได้เฉพาะไฟล์ png, jpg, jpeg, webp, pdf")
+            slip_filename = save_uploaded_file(slip_file, prefix="slip")
+            if not slip_filename:
+                flash("อัปโหลดสลิปได้เฉพาะไฟล์ png, jpg, jpeg, webp, pdf")
                 return redirect(url_for("register_event", event_id=event_id))
-            safe_name = secure_filename(slip_file.filename)
-            ext = safe_name.rsplit(".", 1)[1].lower()
-            slip_filename = f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}.{ext}"
-            slip_file.save(os.path.join(app.config["UPLOAD_FOLDER"], slip_filename))
 
         conn = get_db()
         c = conn.cursor()
@@ -256,10 +301,10 @@ def register_event(event_id):
         )
         registration_id = c.lastrowid
 
-        for member_name, member_idcard in members:
+        for member_name, member_idcard, idcard_file_name in members:
             c.execute(
-                "INSERT INTO registration_members (registration_id, member_name, member_idcard) VALUES (?, ?, ?)",
-                (registration_id, member_name, member_idcard)
+                "INSERT INTO registration_members (registration_id, member_name, member_idcard, idcard_file) VALUES (?, ?, ?, ?)",
+                (registration_id, member_name, member_idcard, idcard_file_name)
             )
 
         conn.commit()
@@ -318,16 +363,30 @@ def admin_dashboard():
 
     event_map = {}
     count_map = {}
+    dashboard = {
+        "tournaments": len(tournaments),
+        "events": 0,
+        "registrations": 0,
+        "open_events": 0,
+    }
+
     for t in tournaments:
         events = conn.execute(
             "SELECT * FROM events WHERE tournament_id = ? ORDER BY id ASC",
             (t["id"],)
         ).fetchall()
         event_map[t["id"]] = events
-        count_map[t["id"]] = {e["id"]: event_reg_count(e["id"]) for e in events}
-    conn.close()
+        count_map[t["id"]] = {}
+        dashboard["events"] += len(events)
+        for e in events:
+            c = event_reg_count(e["id"])
+            count_map[t["id"]][e["id"]] = c
+            dashboard["registrations"] += c
+            if e["is_open"]:
+                dashboard["open_events"] += 1
 
-    return render_template("admin_dashboard.html", tournaments=tournaments, event_map=event_map, count_map=count_map)
+    conn.close()
+    return render_template("admin_dashboard.html", tournaments=tournaments, event_map=event_map, count_map=count_map, dashboard=dashboard)
 
 
 @app.route("/admin/tournament/create", methods=["GET", "POST"])
@@ -384,8 +443,9 @@ def manage_events(tournament_id):
         (tournament_id,)
     ).fetchall()
     counts = {e["id"]: event_reg_count(e["id"]) for e in events}
+    summary_rows, total_regs = registration_summary_by_event(tournament_id)
     conn.close()
-    return render_template("manage_events.html", tournament=tournament, events=events, counts=counts)
+    return render_template("manage_events.html", tournament=tournament, events=events, counts=counts, summary_rows=summary_rows, total_regs=total_regs)
 
 
 @app.route("/admin/tournament/<int:tournament_id>/event/create", methods=["GET", "POST"])
@@ -542,10 +602,10 @@ def delete_event(event_id):
 
     regs = conn.execute("SELECT id, slip_filename FROM registrations WHERE event_id = ?", (event_id,)).fetchall()
     for reg in regs:
-        if reg["slip_filename"]:
-            path = os.path.join(app.config["UPLOAD_FOLDER"], reg["slip_filename"])
-            if os.path.exists(path):
-                os.remove(path)
+        members = conn.execute("SELECT idcard_file FROM registration_members WHERE registration_id = ?", (reg["id"],)).fetchall()
+        for m in members:
+            delete_uploaded_file(m["idcard_file"])
+        delete_uploaded_file(reg["slip_filename"])
         conn.execute("DELETE FROM registration_members WHERE registration_id = ?", (reg["id"],))
     conn.execute("DELETE FROM registrations WHERE event_id = ?", (event_id,))
     conn.execute("DELETE FROM events WHERE id = ?", (event_id,))
@@ -579,7 +639,7 @@ def tournament_registrations(tournament_id):
            FROM registrations r
            JOIN events e ON r.event_id = e.id
            WHERE e.tournament_id = ?
-           ORDER BY r.id DESC""",
+           ORDER BY e.id ASC, r.id DESC""",
         (tournament_id,)
     ).fetchall()
 
@@ -590,8 +650,101 @@ def tournament_registrations(tournament_id):
             (row["id"],)
         ).fetchall()
 
+    summary_rows, total_regs = registration_summary_by_event(tournament_id)
     conn.close()
-    return render_template("tournament_registrations.html", tournament=tournament, rows=rows, members_map=members_map)
+    return render_template("tournament_registrations.html", tournament=tournament, rows=rows, members_map=members_map, summary_rows=summary_rows, total_regs=total_regs)
+
+
+@app.route("/admin/event/<int:event_id>/export")
+def export_event_excel(event_id):
+    if not is_logged_in():
+        flash("กรุณาเข้าสู่ระบบก่อน")
+        return redirect(url_for("login"))
+
+    conn = get_db()
+    event = conn.execute(
+        """SELECT e.*, t.title AS tournament_title, t.created_by
+           FROM events e
+           JOIN tournaments t ON e.tournament_id = t.id
+           WHERE e.id = ?""",
+        (event_id,)
+    ).fetchone()
+
+    if not event or event["created_by"] != session["user_id"]:
+        conn.close()
+        flash("ไม่พบอีเวนต์")
+        return redirect(url_for("admin_dashboard"))
+
+    regs = conn.execute(
+        "SELECT * FROM registrations WHERE event_id = ? ORDER BY id ASC",
+        (event_id,)
+    ).fetchall()
+
+    member_map = {}
+    max_members = 0
+    for reg in regs:
+        members = conn.execute(
+            "SELECT * FROM registration_members WHERE registration_id = ? ORDER BY id ASC",
+            (reg["id"],)
+        ).fetchall()
+        member_map[reg["id"]] = members
+        max_members = max(max_members, len(members))
+    conn.close()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "รายชื่อสมัคร"
+
+    headers = [
+        "ลำดับ", "งานแข่งขัน", "อีเวนต์", "ประเภท", "เพศ", "รุ่น",
+        "ค่าสมัคร", "ชื่อทีม", "ผู้ติดต่อ", "เบอร์โทร", "สลิป", "หมายเหตุ", "สมัครเมื่อ"
+    ]
+    for i in range(1, max_members + 1):
+        headers.extend([f"สมาชิก {i}", f"เลขบัตรสมาชิก {i}", f"ไฟล์บัตรสมาชิก {i}"])
+    ws.append(headers)
+
+    event_name = event_display_name(event)
+    for idx, reg in enumerate(regs, start=1):
+        row = [
+            idx,
+            event["tournament_title"],
+            event_name,
+            category_label(event["category_type"]),
+            gender_label(event["gender_type"]),
+            age_label(event["age_group"]),
+            event["fee"],
+            reg["team_name"] or "",
+            reg["contact_name"],
+            reg["phone"],
+            reg["slip_filename"] or "",
+            reg["notes"] or "",
+            reg["created_at"],
+        ]
+        members = member_map[reg["id"]]
+        for m in members:
+            row.extend([m["member_name"], m["member_idcard"] or "", m["idcard_file"] or ""])
+        for _ in range(max_members - len(members)):
+            row.extend(["", "", ""])
+        ws.append(row)
+
+    for col in ws.columns:
+        max_len = 0
+        letter = col[0].column_letter
+        for cell in col:
+            val = str(cell.value) if cell.value is not None else ""
+            max_len = max(max_len, len(val))
+        ws.column_dimensions[letter].width = min(max_len + 2, 30)
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name=f"event_{event_id}_registrations.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
 
 @app.route("/admin/registration/<int:registration_id>/delete")
@@ -615,10 +768,13 @@ def delete_registration(registration_id):
         flash("ไม่พบข้อมูลผู้สมัคร")
         return redirect(url_for("admin_dashboard"))
 
-    if row["slip_filename"]:
-        path = os.path.join(app.config["UPLOAD_FOLDER"], row["slip_filename"])
-        if os.path.exists(path):
-            os.remove(path)
+    members = conn.execute(
+        "SELECT idcard_file FROM registration_members WHERE registration_id = ?",
+        (registration_id,)
+    ).fetchall()
+    for m in members:
+        delete_uploaded_file(m["idcard_file"])
+    delete_uploaded_file(row["slip_filename"])
 
     conn.execute("DELETE FROM registration_members WHERE registration_id = ?", (registration_id,))
     conn.execute("DELETE FROM registrations WHERE id = ?", (registration_id,))

@@ -1,18 +1,51 @@
 {% extends 'base.html' %}
 {% block title %}จัดการอีเวนต์{% endblock %}
 {% block content %}
-<div class="card">
+<div class=\"card\">
     <h1>ขั้นที่ 2: เพิ่มอีเวนต์ย่อย</h1>
     <h2>{{ tournament['title'] }}</h2>
     <p>{{ tournament['description'] or '-' }}</p>
-    <div class="row-actions">
-        <a class="btn btn-success" href="{{ url_for('create_event', tournament_id=tournament['id']) }}">+ เพิ่มอีเวนต์</a>
-        <a class="btn" href="{{ url_for('tournament_registrations', tournament_id=tournament['id']) }}">ดูผู้สมัครทั้งหมด</a>
-        <a class="btn btn-secondary" href="{{ url_for('admin_dashboard') }}">กลับแดชบอร์ด</a>
+    <div class=\"row-actions\">
+        <a class=\"btn btn-success\" href=\"{{ url_for('create_event', tournament_id=tournament['id']) }}\">+ เพิ่มอีเวนต์</a>
+        <a class=\"btn\" href=\"{{ url_for('tournament_registrations', tournament_id=tournament['id']) }}\">ดูผู้สมัครทั้งหมด</a>
+        <a class=\"btn btn-secondary\" href=\"{{ url_for('admin_dashboard') }}\">กลับแดชบอร์ด</a>
     </div>
 </div>
 
-<div class="card">
+<div class=\"grid two-col\">
+    <div class=\"card\">
+        <h3>สรุปจำนวนสมัครแต่ละประเภท</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>อีเวนต์</th>
+                    <th>สมัครแล้ว</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in summary_rows %}
+                <tr>
+                    <td>{{ event_display_name(row['event']) }}</td>
+                    <td>{{ row['count'] }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan=\"2\">ยังไม่มีอีเวนต์</td></tr>
+                {% endfor %}
+                <tr class=\"summary-total\">
+                    <td>รวมทั้งหมด</td>
+                    <td>{{ total_regs }}</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class=\"card\">
+        <h3>คำสั่งด่วน</h3>
+        <p class=\"muted\">เพิ่มอีเวนต์ แล้วสามารถดาวน์โหลดรายชื่อแต่ละอีเวนต์เป็น Excel ได้จากตารางด้านล่าง</p>
+    </div>
+</div>
+
+<div class=\"card\">
     <table>
         <thead>
             <tr>
@@ -39,14 +72,15 @@
                 <td>{{ counts[e['id']] }}</td>
                 <td>{{ 'เปิด' if e['is_open'] else 'ปิด' }}</td>
                 <td>
-                    <div class="row-actions">
-                        <a class="btn btn-secondary" href="{{ url_for('edit_event', event_id=e['id']) }}">แก้ไข</a>
-                        <a class="btn btn-danger" href="{{ url_for('delete_event', event_id=e['id']) }}" onclick="return confirm('ลบอีเวนต์นี้?')">ลบ</a>
+                    <div class=\"row-actions\">
+                        <a class=\"btn\" href=\"{{ url_for('export_event_excel', event_id=e['id']) }}\">Excel</a>
+                        <a class=\"btn btn-secondary\" href=\"{{ url_for('edit_event', event_id=e['id']) }}\">แก้ไข</a>
+                        <a class=\"btn btn-danger\" href=\"{{ url_for('delete_event', event_id=e['id']) }}\" onclick=\"return confirm('ลบอีเวนต์นี้?')\">ลบ</a>
                     </div>
                 </td>
             </tr>
             {% else %}
-            <tr><td colspan="9">ยังไม่มีอีเวนต์</td></tr>
+            <tr><td colspan=\"9\">ยังไม่มีอีเวนต์</td></tr>
             {% endfor %}
         </tbody>
     </table>
