@@ -1,0 +1,5 @@
+<!doctype html><html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>เกียรติบัตร {{ verification_code or 'ตัวอย่าง' }}</title><link rel="stylesheet" href="{{ url_for('static',filename='certificate.css') }}"></head>
+<body class="certificate-page">
+<div class="print-toolbar"><button onclick="window.print()">พิมพ์ / บันทึกเป็น PDF</button>{% if preview_mode|default(false) %}<a href="javascript:window.close()">ปิดตัวอย่าง</a>{% endif %}</div>
+<div class="certificate-list">{% include '_certificate_sheet.html' %}</div>
+</body></html>

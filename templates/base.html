@@ -3,32 +3,61 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{% block title %}ระบบงานแข่งขัน{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <title>{% block title %}ระบบรับสมัครการแข่งขัน{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='saas2') }}">
 </head>
-<body>
-    <nav>
-        <div><strong>🏆 ระบบงานแข่งขัน</strong></div>
-        <div>
-            <a href="{{ url_for('home') }}">หน้าหลัก</a>
-            {% if session.get('user_id') %}
-                <a href="{{ url_for('admin_dashboard') }}">แดชบอร์ด</a>
-                <a href="{{ url_for('logout') }}">ออกจากระบบ</a>
-            {% else %}
-                <a href="{{ url_for('login') }}">ล็อกอินแอดมิน</a>
-            {% endif %}
-        </div>
-    </nav>
-
-    <div class="container">
+<body class="{% if session.get('user_id') %}admin-body{% else %}public-body{% endif %}">
+{% if session.get('user_id') %}
+    <div class="app-shell">
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-brand">
+                <div class="brand-mark">🏆</div>
+                <div><strong>Sport Register</strong><span>ระบบรับสมัครทีม</span></div>
+            </div>
+            <nav class="side-nav">
+                <p class="nav-label">เมนูหลัก</p>
+                <a class="side-link {% if request.endpoint == 'admin_dashboard' %}active{% endif %}" href="{{ url_for('admin_dashboard') }}"><span>⌂</span> ภาพรวมระบบ</a>
+                <a class="side-link {% if request.endpoint == 'create_tournament' %}active{% endif %}" href="{{ url_for('create_tournament') }}"><span>＋</span> สร้างงานแข่งขัน</a>
+                <a class="side-link {% if request.endpoint == 'home' %}active{% endif %}" href="{{ url_for('home') }}"><span>↗</span> หน้ารับสมัคร</a>
+                <p class="nav-label">การจัดการ</p>
+                <a class="side-link" href="{{ url_for('admin_dashboard') }}#tournaments"><span>▦</span> งานแข่งขันทั้งหมด</a>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="profile-mini">
+                    <div class="avatar">{{ (session.get('username') or 'A')[0]|upper }}</div>
+                    <div><strong>{{ session.get('username') }}</strong><span>ผู้ดูแลระบบ</span></div>
+                </div>
+                <a class="logout-link" href="{{ url_for('logout') }}">ออกจากระบบ →</a>
+            </div>
+        </aside>
+        <div class="app-main">
+            <header class="topbar">
+                <button class="menu-toggle" type="button" onclick="toggleSidebar()" aria-label="เปิดเมนู">☰</button>
+                <div class="topbar-title"><strong>{% block topbar_title %}ระบบรับสมัครการแข่งขัน{% endblock %}</strong><span>จัดการข้อมูลได้ง่ายในที่เดียว</span></div>
+                <div class="topbar-actions"><a class="icon-btn" href="{{ url_for('home') }}" target="_blank" title="เปิดหน้ารับสมัคร">↗</a><div class="avatar top-avatar">{{ (session.get('username') or 'A')[0]|upper }}</div></div>
+            </header>
+            <main class="content-area">
+{% else %}
+    <header class="public-header">
+        <a class="public-brand" href="{{ url_for('home') }}"><span class="brand-mark">🏆</span><span><strong>Sport Register</strong><small>ระบบรับสมัครการแข่งขัน</small></span></a>
+        <nav class="public-nav"><a href="{{ url_for('home') }}">หน้าหลัก</a><a class="btn btn-soft" href="{{ url_for('login') }}">เข้าสู่ระบบแอดมิน</a></nav>
+    </header>
+    <main class="public-container">
+{% endif %}
         {% with messages = get_flashed_messages() %}
-            {% if messages %}
-                {% for message in messages %}
-                    <div class="flash">{{ message }}</div>
-                {% endfor %}
-            {% endif %}
+            {% if messages %}{% for message in messages %}<div class="flash">✓ {{ message }}</div>{% endfor %}{% endif %}
         {% endwith %}
         {% block content %}{% endblock %}
+{% if session.get('user_id') %}
+            </main>
+        </div>
     </div>
+{% else %}
+    </main>
+{% endif %}
+<script>
+function toggleSidebar(){document.getElementById('sidebar')?.classList.toggle('open')}
+document.addEventListener('click', function(e){const s=document.getElementById('sidebar');if(!s)return;if(window.innerWidth<=900 && s.classList.contains('open') && !s.contains(e.target) && !e.target.classList.contains('menu-toggle')) s.classList.remove('open')})
+</script>
 </body>
 </html>

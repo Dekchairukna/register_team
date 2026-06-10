@@ -1,0 +1,9 @@
+<!doctype html><html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>พิมพ์เกียรติบัตรทั้งอีเวนต์</title><link rel="stylesheet" href="{{ url_for('static',filename='certificate.css') }}"></head>
+<body class="certificate-page">
+<div class="print-toolbar"><button onclick="window.print()">พิมพ์ทั้งหมด / บันทึกเป็น PDF</button><a href="javascript:window.close()">ปิด</a></div>
+<div class="certificate-list">
+{% for item in certificates %}
+  {% with reg=item['reg'],member=item['member'],verification_code=item['verification_code'],team_mode=item['team_mode'],preview_mode=false %}{% include '_certificate_sheet.html' %}{% endwith %}
+{% endfor %}
+</div>
+</body></html>

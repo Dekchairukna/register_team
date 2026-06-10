@@ -1,0 +1,49 @@
+{% extends 'base.html' %}
+{% block title %}ตั้งค่าเกียรติบัตร{% endblock %}
+{% block topbar_title %}ออกแบบเกียรติบัตร{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>ตั้งค่าเกียรติบัตร</h1><p class="muted">{{ tournament['title'] }} · รองรับโลโก้ 3 รูป พื้นหลัง ลายเซ็น ตราประทับ และพรีวิวก่อนพิมพ์</p></div>
+  <div class="page-actions"><a class="btn btn-soft" target="_blank" href="{{ url_for('certificate_preview',tournament_id=tournament['id']) }}">ดูตัวอย่างเกียรติบัตร</a><a class="btn btn-secondary" href="{{ url_for('manage_events',tournament_id=tournament['id']) }}">← กลับ</a></div>
+</div>
+<form method="post" enctype="multipart/form-data">
+<div class="grid two-col">
+  <div class="card">
+    <h3>การเปิดใช้งาน</h3>
+    <label class="inline-check"><input type="checkbox" name="certificates_enabled" {% if tournament['certificates_enabled'] %}checked{% endif %}> เปิดใช้งานเกียรติบัตร</label>
+    <label class="inline-check"><input type="checkbox" name="certificate_self_download" {% if tournament['certificate_self_download'] %}checked{% endif %}> ให้ผู้สมัครดาวน์โหลดเองจากหน้าสถานะ</label>
+    <label class="inline-check"><input type="checkbox" name="certificate_require_approval" {% if tournament['certificate_require_approval'] %}checked{% endif %}> ต้องอนุมัติรายชื่อก่อนดาวน์โหลด</label>
+    <hr>
+    <label>ธีมเกียรติบัตร</label>
+    <select name="cert_style"><option value="navy_gold" {% if (tournament['cert_style'] or 'navy_gold')=='navy_gold' %}selected{% endif %}>น้ำเงิน–ทองหรู แบบ HTML (แนะนำ)</option><option value="classic_gold" {% if tournament['cert_style']=='classic_gold' %}selected{% endif %}>ทองคลาสสิก แบบสากล</option></select>
+    <label>หัวข้อใหญ่</label><input name="cert_heading" value="{{ tournament['cert_heading'] or 'เกียรติบัตร' }}" placeholder="เกียรติบัตร">
+    <label>ข้อความท้ายใบประกาศ <span class="muted">(ไม่บังคับ)</span></label><input name="cert_footer_note" value="{{ tournament['cert_footer_note'] or '' }}" placeholder="เช่น จัดทำโดยคณะกรรมการจัดการแข่งขัน">
+  </div>
+  <div class="card">
+    <h3>ข้อความบนเกียรติบัตร</h3>
+    <label>ชื่อหน่วยงาน</label><input name="cert_org" value="{{ tournament['cert_org'] or '' }}" placeholder="เช่น สมาคมกีฬาเปตองแห่งประเทศไทย">
+    <label>วันจัดการแข่งขัน</label><input name="cert_date" value="{{ tournament['cert_date'] or '' }}" placeholder="เช่น 11–12 เมษายน พ.ศ. 2569">
+    <label>สถานที่</label><input name="cert_place" value="{{ tournament['cert_place'] or '' }}" placeholder="เช่น โรงเรียนบ้านหนองโก จังหวัดขอนแก่น">
+    <label>ชื่อผู้ลงนาม</label><input name="cert_signer" value="{{ tournament['cert_signer'] or '' }}">
+    <label>ตำแหน่งผู้ลงนาม</label><input name="cert_signer_position" value="{{ tournament['cert_signer_position'] or '' }}" placeholder="เช่น ประธานจัดการแข่งขัน">
+  </div>
+</div>
+<div class="card">
+  <div class="card-head"><div><h3>โลโก้ด้านบน</h3><p class="muted">อัปโหลดได้สูงสุด 3 รูป แนะนำไฟล์ PNG พื้นหลังโปร่งใส ระบบจะจัดเรียงกึ่งกลางให้อัตโนมัติ</p></div></div>
+  <div class="cert-assets-grid">
+  {% for field,label in [('cert_logo_1','โลโก้หน่วยงาน 1'),('cert_logo_2','โลโก้หน่วยงาน 2'),('cert_logo_3','โลโก้หน่วยงาน 3')] %}
+    <div class="asset-card"><strong>{{ label }}</strong>{% if tournament[field] %}<img src="{{ url_for('uploaded_file',filename=tournament[field]) }}" alt="{{ label }}"><label class="inline-check"><input type="checkbox" name="remove_{{ field }}"> ลบรูปเดิม</label>{% else %}<div class="asset-placeholder">ยังไม่มีรูป</div>{% endif %}<input type="file" name="{{ field }}" accept="image/png,image/jpeg,image/webp"></div>
+  {% endfor %}
+  </div>
+</div>
+<div class="card">
+  <div class="card-head"><div><h3>รูปประกอบเพิ่มเติม</h3><p class="muted">พื้นหลังเป็นตัวเลือกเสริม หากไม่อัปโหลดระบบจะใช้พื้นหลัง HTML/SVG น้ำเงิน–ทองที่เตรียมไว้</p></div></div>
+  <div class="cert-assets-grid">
+  {% for field,label in [('cert_background','พื้นหลังเกียรติบัตร'),('cert_signature','รูปลายเซ็น'),('cert_stamp','ตราประทับ')] %}
+    <div class="asset-card"><strong>{{ label }}</strong>{% if tournament[field] %}<img src="{{ url_for('uploaded_file',filename=tournament[field]) }}" alt="{{ label }}"><label class="inline-check"><input type="checkbox" name="remove_{{ field }}"> ลบรูปเดิม</label>{% else %}<div class="asset-placeholder">ยังไม่มีรูป</div>{% endif %}<input type="file" name="{{ field }}" accept="image/png,image/jpeg,image/webp"></div>
+  {% endfor %}
+  </div>
+</div>
+<div class="row-actions"><button type="submit">บันทึกตั้งค่าเกียรติบัตร</button><a class="btn btn-soft" target="_blank" href="{{ url_for('certificate_preview',tournament_id=tournament['id']) }}">ดูตัวอย่างก่อนใช้งาน</a></div>
+</form>
+{% endblock %}

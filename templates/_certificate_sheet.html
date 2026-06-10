@@ -1,0 +1,83 @@
+<div class="cert-sheet {{ reg['cert_style'] or 'navy_gold' }}">
+  {% if reg['cert_background'] %}
+    <img class="cert-background-image" src="{{ url_for('uploaded_file',filename=reg['cert_background']) }}" alt="พื้นหลัง">
+  {% else %}
+    <img class="cert-background-image default-bg" src="{{ url_for('static',filename='certificate_assets/premium_blue_gold.svg') }}" alt="พื้นหลังเกียรติบัตร">
+  {% endif %}
+
+  <div class="cert-frame-highlight"></div>
+  <div class="cert-top-ornament"><span></span><b>✦</b><span></span></div>
+  {% if preview_mode|default(false) %}<div class="preview-label">PREVIEW</div>{% endif %}
+
+  <div class="cert-inner">
+    <header class="certificate-header">
+      <div class="logo-row">
+        {% set logos = [reg['cert_logo_1'],reg['cert_logo_2'],reg['cert_logo_3']] %}
+        {% for logo in logos %}
+          {% if logo %}
+            <div class="logo-box"><img src="{{ url_for('uploaded_file',filename=logo) }}" alt="โลโก้หน่วยงาน"></div>
+          {% elif preview_mode|default(false) %}
+            <div class="logo-box logo-placeholder"><span>LOGO</span></div>
+          {% endif %}
+        {% endfor %}
+      </div>
+      <div class="org-name">{{ reg['cert_org'] or reg['tournament_title'] }}</div>
+      <div class="cert-heading">{{ reg['cert_heading'] or 'เกียรติบัตร' }}</div>
+      <div class="cert-subtitle"><i></i><span>การแข่งขันกีฬาเปตอง</span><i></i></div>
+    </header>
+
+    <main class="certificate-main">
+      <div class="cert-lead">ขอมอบเกียรติบัตรฉบับนี้ให้แก่</div>
+      <div class="cert-name">{% if team_mode %}{{ reg['team_name'] or reg['affiliation'] or 'ทีมผู้เข้าร่วมการแข่งขัน' }}{% else %}{{ member['member_name'] }}{% endif %}</div>
+      <div class="name-divider"><span></span><b>◆</b><span></span></div>
+      <div class="cert-detail">
+        {% if (reg['award_result'] or 'participant') == 'participant' %}
+          <div>เพื่อแสดงว่าได้เข้าร่วมการแข่งขันกีฬาเปตอง</div>
+        {% else %}
+          <div>เพื่อแสดงว่าได้รับรางวัล <strong class="award-text">{{ award_label(reg['award_result'],reg['award_custom']) }}</strong></div>
+        {% endif %}
+        <div class="event-title">{{ reg['tournament_title'] }}</div>
+        <div>ประเภท {{ reg['event_name'] or category_label(reg['category_type']) ~ ' ' ~ gender_label(reg['gender_type']) ~ ' ' ~ age_label(reg['age_group']) }}</div>
+        {% if reg['affiliation'] %}<div>ในนาม {{ reg['affiliation'] }}</div>{% endif %}
+        {% if reg['cert_date'] or reg['cert_place'] %}
+          <div>จัดขึ้น{% if reg['cert_date'] %}วันที่ {{ reg['cert_date'] }}{% endif %}{% if reg['cert_place'] %} ณ {{ reg['cert_place'] }}{% endif %}</div>
+        {% endif %}
+      </div>
+    </main>
+
+    <footer class="certificate-footer">
+      <div class="cert-code">
+        {% if verification_code %}
+          <div>เลขตรวจสอบ: {{ verification_code }}</div>
+          <div>สแกน QR Code เพื่อตรวจสอบความถูกต้อง</div>
+        {% endif %}
+      </div>
+
+      <div class="signature-area">
+        <div class="signature-stack">
+          {% if reg['cert_signature'] %}<img class="signature-image" src="{{ url_for('uploaded_file',filename=reg['cert_signature']) }}" alt="ลายเซ็น">{% endif %}
+          {% if reg['cert_stamp'] %}<img class="stamp-image" src="{{ url_for('uploaded_file',filename=reg['cert_stamp']) }}" alt="ตราประทับ">{% endif %}
+        </div>
+        {% if reg['cert_signer'] %}
+          <div class="sign-line">({{ reg['cert_signer'] }})</div>
+          <div class="sign-position">{{ reg['cert_signer_position'] or '' }}</div>
+        {% else %}
+          <div class="sign-line">(................................................)</div>
+          <div class="sign-position">ประธานจัดการแข่งขัน</div>
+        {% endif %}
+      </div>
+
+      <div class="qr-area">
+        {% if verification_code %}
+          <img class="qr-image" src="{{ url_for('certificate_qr',code=verification_code) }}" alt="QR Code">
+          <div>ตรวจสอบเกียรติบัตร</div>
+        {% elif preview_mode|default(false) %}
+          <div class="qr-preview">QR</div>
+          <div>ตรวจสอบเกียรติบัตร</div>
+        {% endif %}
+      </div>
+    </footer>
+
+    {% if reg['cert_footer_note'] %}<div class="cert-note">{{ reg['cert_footer_note'] }}</div>{% endif %}
+  </div>
+</div>

@@ -1,90 +1,25 @@
 {% extends 'base.html' %}
 {% block title %}จัดการอีเวนต์{% endblock %}
+{% block topbar_title %}จัดการอีเวนต์{% endblock %}
 {% block content %}
-<div class="card">
-    <h1>ขั้นที่ 2: เพิ่มอีเวนต์ย่อย</h1>
-    <h2>{{ tournament['title'] }}</h2>
-    <p>{{ tournament['description'] or '-' }}</p>
-    <div class="row-actions">
-        <a class="btn btn-success" href="{{ url_for('create_event', tournament_id=tournament['id']) }}">+ เพิ่มอีเวนต์</a>
-        <a class="btn" href="{{ url_for('tournament_registrations', tournament_id=tournament['id']) }}">ดูผู้สมัครทั้งหมด</a>
-        <a class="btn btn-secondary" href="{{ url_for('edit_tournament', tournament_id=tournament['id']) }}">แก้ไขงานแข่งขัน</a>
-        <a class="btn btn-danger" href="{{ url_for('delete_tournament', tournament_id=tournament['id']) }}" onclick="return confirm('ลบงานแข่งขันนี้ทั้งหมด? ระบบจะลบอีเวนต์ รายชื่อสมัคร และไฟล์แนบทั้งหมดถาวร')">ลบงานแข่งขัน</a>
-        <a class="btn btn-secondary" href="{{ url_for('admin_dashboard') }}">กลับแดชบอร์ด</a>
-    </div>
+<div class="page-head">
+ <div><h1>{{ tournament['title'] }}</h1><p class="muted">{{ tournament['description'] or 'จัดการรายการแข่งขันย่อยและรายชื่อผู้สมัคร' }}</p></div>
+ <div class="page-actions"><a class="btn btn-secondary" href="{{ url_for('admin_dashboard') }}">← กลับแดชบอร์ด</a></div>
 </div>
-
-<div class="grid two-col">
-    <div class="card">
-        <h3>สรุปจำนวนสมัครแต่ละประเภท</h3>
-        <table>
-            <thead>
-                <tr>
-                    <th>อีเวนต์</th>
-                    <th>สมัครแล้ว</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for row in summary_rows %}
-                <tr>
-                    <td>{{ event_display_name(row['event']) }}</td>
-                    <td>{{ row['count'] }}</td>
-                </tr>
-                {% else %}
-                <tr><td colspan="2">ยังไม่มีอีเวนต์</td></tr>
-                {% endfor %}
-                <tr class="summary-total">
-                    <td>รวมทั้งหมด</td>
-                    <td>{{ total_regs }}</td>
-                </tr>
-            </tbody>
-        </table>
-    </div>
-
-    <div class="card">
-        <h3>คำสั่งด่วน</h3>
-        <p class="muted">เพิ่มอีเวนต์ แล้วสามารถดาวน์โหลดรายชื่อแต่ละอีเวนต์เป็น Excel ได้จากตารางด้านล่าง</p>
-    </div>
+<div class="grid four-col">
+ <div class="card stat-card"><div class="stat-label">อีเวนต์ในงานนี้</div><div class="stat-number">{{ events|length }}</div><div class="stat-note">รายการแข่งขันทั้งหมด</div></div>
+ <div class="card stat-card"><div class="stat-label">ผู้สมัครหลัก</div><div class="stat-number">{{ total_regs }}</div><div class="stat-note">ยังไม่รวม Waiting List</div></div>
+ <div class="card stat-card"><div class="stat-label">อีเวนต์เปิดรับ</div><div class="stat-number">{{ events|selectattr('is_open')|list|length }}</div><div class="stat-note">สมัครผ่านลิงก์ได้ทันที</div></div>
+ <div class="card stat-card"><div class="stat-label">เครื่องมือ Excel</div><div class="stat-number">2</div><div class="stat-note">นำเข้าอีเวนต์และรายชื่อ</div></div>
 </div>
-
 <div class="card">
-    <table>
-        <thead>
-            <tr>
-                <th>ชื่ออีเวนต์</th>
-                <th>ประเภท</th>
-                <th>เพศ</th>
-                <th>รุ่น</th>
-                <th>ค่าสมัคร</th>
-                <th>รับ</th>
-                <th>สมัครแล้ว</th>
-                <th>สถานะ</th>
-                <th>จัดการ</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for e in events %}
-            <tr>
-                <td>{{ event_display_name(e) }}</td>
-                <td>{{ category_label(e['category_type']) }}</td>
-                <td>{{ gender_label(e['gender_type']) }}</td>
-                <td>{{ age_label(e['age_group']) }}</td>
-                <td>{{ e['fee'] }} บาท</td>
-                <td>{{ e['max_slots'] }}</td>
-                <td>{{ counts[e['id']] }}</td>
-                <td>{{ 'เปิด' if e['is_open'] else 'ปิด' }}</td>
-                <td>
-                    <div class="row-actions">
-                        <a class="btn" href="{{ url_for('export_event_excel', event_id=e['id']) }}">Excel</a>
-                        <a class="btn btn-secondary" href="{{ url_for('edit_event', event_id=e['id']) }}">แก้ไข</a>
-                        <a class="btn btn-danger" href="{{ url_for('delete_event', event_id=e['id']) }}" onclick="return confirm('ลบอีเวนต์นี้?')">ลบ</a>
-                    </div>
-                </td>
-            </tr>
-            {% else %}
-            <tr><td colspan="9">ยังไม่มีอีเวนต์</td></tr>
-            {% endfor %}
-        </tbody>
-    </table>
+ <div class="card-head"><div><h3>เครื่องมือจัดการ</h3><p class="muted">เพิ่มอีเวนต์ นำเข้าข้อมูล และตั้งค่าเกียรติบัตร</p></div></div>
+ <div class="row-actions"><a class="btn btn-success" href="{{ url_for('create_event', tournament_id=tournament['id']) }}">＋ เพิ่มอีเวนต์</a><a class="btn" href="{{ url_for('import_events', tournament_id=tournament['id']) }}">⇩ Import อีเวนต์ Excel</a><a class="btn btn-soft" href="{{ url_for('event_template', tournament_id=tournament['id']) }}">ไฟล์ตัวอย่างอีเวนต์</a><a class="btn btn-soft" href="{{ url_for('tournament_registrations', tournament_id=tournament['id']) }}">ดูผู้สมัครทั้งหมด</a><a class="btn btn-warning" href="{{ url_for('certificate_settings', tournament_id=tournament['id']) }}">ตั้งค่าเกียรติบัตร</a></div>
+</div>
+<div class="card tournament-card">
+ <div class="card-head"><div><h3>รายการอีเวนต์</h3><p class="muted">รวมผู้สมัครหลัก {{ total_regs }} รายการ</p></div></div>
+ <div class="table-wrap"><table><thead><tr><th>อีเวนต์</th><th>ผู้เล่น</th><th>ค่าสมัคร</th><th>จำนวนรับ</th><th>สมัครแล้ว</th><th>สถานะ</th><th>จัดการ</th></tr></thead><tbody>
+ {% for e in events %}<tr><td><strong>{{ event_display_name(e) }}</strong><div class="muted">{{ category_label(e['category_type']) }}</div></td><td>{% if e['category_type']=='single' %}1{% elif e['category_type']=='pair' %}2–3{% else %}3–4{% endif %} คน</td><td>{% if e['has_fee'] %}{{ e['fee'] }} บาท/{{ fee_per_label(e['fee_per']) }}{% else %}<span class="badge badge-open">สมัครฟรี</span>{% endif %}</td><td>{% if e['has_limit'] %}{{ e['max_slots'] }}{% else %}ไม่จำกัด{% endif %}</td><td><strong>{{ counts[e['id']] }}</strong>{% if waitcounts[e['id']] %}<div class="muted">สำรอง {{ waitcounts[e['id']] }}</div>{% endif %}</td><td><span class="badge {% if e['is_open'] %}badge-open{% else %}badge-closed{% endif %}">{{ 'เปิดรับ' if e['is_open'] else 'ปิดรับ' }}</span></td><td><div class="row-actions"><a class="btn btn-soft btn-sm" href="{{ url_for('tournament_registrations', tournament_id=tournament['id'], event_id=e['id']) }}">ผู้สมัคร</a><a class="btn btn-success btn-sm" target="_blank" href="{{ url_for('register_event', event_id=e['id']) }}">หน้าสมัคร</a><a class="btn btn-soft btn-sm" href="{{ url_for('import_registrations', event_id=e['id']) }}">Import</a><a class="btn btn-secondary btn-sm" href="{{ url_for('registration_template', event_id=e['id']) }}">ตัวอย่าง</a><a class="btn btn-secondary btn-sm" href="{{ url_for('export_event_excel', event_id=e['id']) }}">Export</a>{% if tournament['certificates_enabled'] %}<a class="btn btn-warning btn-sm" target="_blank" href="{{ url_for('print_event_certificates',event_id=e['id']) }}">ปริ้นเกียรติบัตร</a>{% endif %}<a class="btn btn-warning btn-sm" href="{{ url_for('edit_event', event_id=e['id']) }}">แก้ไข</a><a class="btn btn-danger btn-sm" href="{{ url_for('delete_event', event_id=e['id']) }}" onclick="return confirm('ลบอีเวนต์นี้?')">ลบ</a></div></td></tr>{% else %}<tr><td colspan="7" class="empty-state">ยังไม่มีอีเวนต์ กด “เพิ่มอีเวนต์” เพื่อเริ่มต้น</td></tr>{% endfor %}
+ </tbody></table></div>
 </div>
 {% endblock %}

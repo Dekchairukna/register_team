@@ -1,911 +1,654 @@
-from flask import Flask, render_template, request, redirect, url_for, session, flash, send_from_directory, send_file
-import sqlite3
-from werkzeug.security import generate_password_hash, check_password_hash
-from werkzeug.utils import secure_filename
+from flask import Flask, render_template, request, redirect, url_for, session, flash, send_from_directory, send_file, abort, jsonify
+import sqlite3, os, uuid, secrets
 from datetime import datetime
 from io import BytesIO
+from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
 import openpyxl
-import os
+import qrcode
+from openpyxl.styles import Font, PatternFill, Alignment
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_NAME = os.path.join(BASE_DIR, "tournament_events.db")
-UPLOAD_FOLDER = os.path.join(BASE_DIR, "static", "uploads")
-ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "pdf", "webp"}
-
+DB_NAME = os.environ.get('SQLITE_DB_PATH', os.path.join(BASE_DIR, 'tournament_events.db'))
+DATABASE_URL = os.environ.get('DATABASE_URL', '').strip()
+if DATABASE_URL.startswith('postgres://'):
+    DATABASE_URL = 'postgresql://' + DATABASE_URL[len('postgres://'):]
+if DATABASE_URL.startswith('postgresql+psycopg://'):
+    DATABASE_URL = 'postgresql://' + DATABASE_URL[len('postgresql+psycopg://'):]
+IS_POSTGRES = DATABASE_URL.startswith('postgresql://')
+UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER', os.path.join(BASE_DIR, 'static', 'uploads'))
+ALLOWED_EXTENSIONS = {'png','jpg','jpeg','pdf','webp'}
+CERT_IMAGE_EXTENSIONS = {'png','jpg','jpeg','webp'}
+EXCEL_EXTENSIONS = {'xlsx'}
 app = Flask(__name__)
-app.secret_key = "change-this-secret-key"
-app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
-app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
-
+app.secret_key = os.environ.get('SECRET_KEY', 'change-this-secret-key')
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = 15 * 1024 * 1024
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
+class PostgresCursor:
+    """ทำให้คำสั่ง SQL เดิมที่ใช้ ? ทำงานกับ psycopg ได้โดยไม่ต้องเขียน route ใหม่ทั้งหมด"""
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def execute(self, sql, params=()):
+        self._cursor.execute(sql.replace('?', '%s'), params or ())
+        return self
+
+    def executemany(self, sql, params_seq):
+        self._cursor.executemany(sql.replace('?', '%s'), params_seq)
+        return self
+
+    def fetchone(self):
+        return self._cursor.fetchone()
+
+    def fetchall(self):
+        return self._cursor.fetchall()
+
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
+
+    def close(self):
+        self._cursor.close()
+
+
+class PostgresConnection:
+    def __init__(self, connection):
+        self._connection = connection
+
+    def cursor(self):
+        return PostgresCursor(self._connection.cursor())
+
+    def execute(self, sql, params=()):
+        return self.cursor().execute(sql, params)
+
+    def commit(self):
+        self._connection.commit()
+
+    def rollback(self):
+        self._connection.rollback()
+
+    def close(self):
+        self._connection.close()
+
+
 def get_db():
+    if IS_POSTGRES:
+        import psycopg
+        from psycopg.rows import dict_row
+        return PostgresConnection(psycopg.connect(DATABASE_URL, row_factory=dict_row))
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     return conn
 
 
+def ensure_column(c, table, name, ddl):
+    if IS_POSTGRES:
+        rows = c.execute('''SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=?''', (table,)).fetchall()
+        cols = [row['column_name'] for row in rows]
+    else:
+        cols = [row[1] for row in c.execute(f'PRAGMA table_info({table})').fetchall()]
+    if name not in cols:
+        c.execute(f'ALTER TABLE {table} ADD COLUMN {name} {ddl}')
+
+
+def insert_returning_id(conn, sql, params):
+    if IS_POSTGRES:
+        return conn.execute(sql.rstrip().rstrip(';') + ' RETURNING id', params).fetchone()['id']
+    c = conn.cursor(); c.execute(sql, params); return c.lastrowid
+
+
 def init_db():
-    conn = get_db()
-    c = conn.cursor()
-
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            role TEXT NOT NULL DEFAULT 'admin'
-        )
-    """)
-
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS tournaments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            description TEXT,
-            created_by INTEGER,
-            created_at TEXT,
-            is_open INTEGER NOT NULL DEFAULT 1,
-            FOREIGN KEY(created_by) REFERENCES users(id)
-        )
-    """)
-
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tournament_id INTEGER NOT NULL,
-            event_name TEXT,
-            category_type TEXT NOT NULL,
-            gender_type TEXT NOT NULL,
-            age_group TEXT NOT NULL,
-            max_slots INTEGER NOT NULL,
-            fee INTEGER NOT NULL DEFAULT 0,
-            team_size INTEGER NOT NULL DEFAULT 1,
-            is_open INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT,
-            FOREIGN KEY(tournament_id) REFERENCES tournaments(id)
-        )
-    """)
-
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS registrations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_id INTEGER NOT NULL,
-            team_name TEXT,
-            contact_name TEXT NOT NULL,
-            phone TEXT NOT NULL,
-            slip_filename TEXT,
-            notes TEXT,
-            created_at TEXT,
-            FOREIGN KEY(event_id) REFERENCES events(id)
-        )
-    """)
-
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS registration_members (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            registration_id INTEGER NOT NULL,
-            member_name TEXT NOT NULL,
-            member_idcard TEXT,
-            idcard_file TEXT,
-            FOREIGN KEY(registration_id) REFERENCES registrations(id)
-        )
-    """)
-
-    # migration: add missing columns for old databases
-    reg_cols = [row[1] for row in c.execute("PRAGMA table_info(registrations)").fetchall()]
-    if "slip_filename" not in reg_cols:
-        c.execute("ALTER TABLE registrations ADD COLUMN slip_filename TEXT")
-    if "notes" not in reg_cols:
-        c.execute("ALTER TABLE registrations ADD COLUMN notes TEXT")
-    if "created_at" not in reg_cols:
-        c.execute("ALTER TABLE registrations ADD COLUMN created_at TEXT")
-
-    member_cols = [row[1] for row in c.execute("PRAGMA table_info(registration_members)").fetchall()]
-    if "idcard_file" not in member_cols:
-        c.execute("ALTER TABLE registration_members ADD COLUMN idcard_file TEXT")
-
-    existing = c.execute("SELECT id FROM users WHERE username = ?", ("admin",)).fetchone()
-    if not existing:
-        c.execute(
-            "INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
-            ("admin", generate_password_hash("1234"), "admin")
-        )
-
-    conn.commit()
-    conn.close()
+    conn = get_db(); c = conn.cursor()
+    id_col = 'SERIAL PRIMARY KEY' if IS_POSTGRES else 'INTEGER PRIMARY KEY AUTOINCREMENT'
+    c.execute(f'''CREATE TABLE IF NOT EXISTS users (id {id_col}, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'admin')''')
+    c.execute(f'''CREATE TABLE IF NOT EXISTS tournaments (id {id_col}, title TEXT NOT NULL, description TEXT, created_by INTEGER, created_at TEXT, is_open INTEGER NOT NULL DEFAULT 1, FOREIGN KEY(created_by) REFERENCES users(id))''')
+    c.execute(f'''CREATE TABLE IF NOT EXISTS events (id {id_col}, tournament_id INTEGER NOT NULL, event_name TEXT, category_type TEXT NOT NULL, gender_type TEXT NOT NULL, age_group TEXT NOT NULL, max_slots INTEGER NOT NULL DEFAULT 0, fee INTEGER NOT NULL DEFAULT 0, team_size INTEGER NOT NULL DEFAULT 1, is_open INTEGER NOT NULL DEFAULT 1, created_at TEXT, FOREIGN KEY(tournament_id) REFERENCES tournaments(id))''')
+    c.execute(f'''CREATE TABLE IF NOT EXISTS registrations (id {id_col}, event_id INTEGER NOT NULL, team_name TEXT, contact_name TEXT NOT NULL, phone TEXT NOT NULL, slip_filename TEXT, notes TEXT, created_at TEXT, FOREIGN KEY(event_id) REFERENCES events(id))''')
+    c.execute(f'''CREATE TABLE IF NOT EXISTS registration_members (id {id_col}, registration_id INTEGER NOT NULL, member_name TEXT NOT NULL, member_idcard TEXT, idcard_file TEXT, FOREIGN KEY(registration_id) REFERENCES registrations(id))''')
+    c.execute(f'''CREATE TABLE IF NOT EXISTS certificates (id {id_col}, registration_id INTEGER NOT NULL, member_id INTEGER, certificate_type TEXT NOT NULL DEFAULT 'individual', verification_code TEXT UNIQUE NOT NULL, issued_at TEXT NOT NULL, FOREIGN KEY(registration_id) REFERENCES registrations(id))''')
+    c.execute(f'''CREATE TABLE IF NOT EXISTS import_logs (id {id_col}, tournament_id INTEGER, event_id INTEGER, import_type TEXT, filename TEXT, imported_count INTEGER DEFAULT 0, error_count INTEGER DEFAULT 0, created_at TEXT)''')
+    for name, ddl in [
+        ('certificates_enabled','INTEGER NOT NULL DEFAULT 0'),('certificate_self_download','INTEGER NOT NULL DEFAULT 1'),
+        ('certificate_require_approval','INTEGER NOT NULL DEFAULT 1'),('cert_org','TEXT'),('cert_date','TEXT'),('cert_place','TEXT'),
+        ('cert_signer','TEXT'),('cert_signer_position','TEXT'),('cert_style',"TEXT NOT NULL DEFAULT 'navy_gold'"),
+        ('cert_heading','TEXT'),('cert_footer_note','TEXT'),('cert_logo_1','TEXT'),('cert_logo_2','TEXT'),('cert_logo_3','TEXT'),
+        ('cert_background','TEXT'),('cert_signature','TEXT'),('cert_stamp','TEXT')]: ensure_column(c,'tournaments',name,ddl)
+    for name, ddl in [
+        ('has_fee','INTEGER NOT NULL DEFAULT 0'),('fee_per','TEXT NOT NULL DEFAULT \'team\''),('require_slip','INTEGER NOT NULL DEFAULT 0'),
+        ('has_limit','INTEGER NOT NULL DEFAULT 1'),('waitlist_enabled','INTEGER NOT NULL DEFAULT 0'),('waitlist_limit','INTEGER NOT NULL DEFAULT 0')]: ensure_column(c,'events',name,ddl)
+    for name, ddl in [
+        ('affiliation','TEXT'),('member_count','INTEGER NOT NULL DEFAULT 1'),('source','TEXT NOT NULL DEFAULT \'web\''),
+        ('registration_code','TEXT'),('status','TEXT NOT NULL DEFAULT \'pending\''),('is_waitlist','INTEGER NOT NULL DEFAULT 0'),('approved_at','TEXT'),('award_result',"TEXT NOT NULL DEFAULT 'participant'"),('award_custom','TEXT'),('award_updated_at','TEXT')]: ensure_column(c,'registrations',name,ddl)
+    c.execute("UPDATE events SET has_fee = CASE WHEN fee > 0 THEN 1 ELSE has_fee END")
+    c.execute("UPDATE events SET has_limit = CASE WHEN max_slots > 0 THEN 1 ELSE 0 END")
+    c.execute("UPDATE registrations SET registration_code = 'REG-' || LPAD(CAST(id AS TEXT), 6, '0') WHERE registration_code IS NULL OR registration_code = ''" if IS_POSTGRES else "UPDATE registrations SET registration_code = 'REG-' || printf('%06d', id) WHERE registration_code IS NULL OR registration_code = ''")
+    c.execute("UPDATE registrations SET member_count = (SELECT COUNT(*) FROM registration_members m WHERE m.registration_id = registrations.id) WHERE member_count IS NULL OR member_count < 1")
+    c.execute('CREATE INDEX IF NOT EXISTS idx_events_tournament_id ON events(tournament_id)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_registrations_event_id ON registrations(event_id)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_registration_members_registration_id ON registration_members(registration_id)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_certificates_registration_id ON certificates(registration_id)')
+    if not c.execute('SELECT id FROM users WHERE username=?',('admin',)).fetchone():
+        c.execute('INSERT INTO users(username,password,role) VALUES(?,?,?)',('admin',generate_password_hash('1234'),'admin'))
+    conn.commit(); conn.close()
 
 
-def is_logged_in():
-    return "user_id" in session
+def is_logged_in(): return 'user_id' in session
 
+def allowed_file(filename, exts=ALLOWED_EXTENSIONS): return '.' in filename and filename.rsplit('.',1)[1].lower() in exts
 
-def allowed_file(filename):
-    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+def now(): return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
+def category_label(v): return {'single':'เดี่ยว','pair':'คู่','team':'ทีม'}.get(v,v)
 
-def category_label(value):
-    return {"single": "เดี่ยว", "pair": "คู่", "team": "ทีม"}.get(value, value)
+def gender_label(v): return {'male':'ชาย','female':'หญิง','mixed':'ผสม','open':'ไม่ระบุ'}.get(v,v)
 
+def age_label(v): return {'youth':'เยาวชน','general':'ทั่วไป','senior':'อาวุโส'}.get(v,v)
 
-def gender_label(value):
-    return {"male": "ชาย", "female": "หญิง", "mixed": "ผสม"}.get(value, value)
+def fee_per_label(v): return {'person':'คน','team':'ทีม'}.get(v,v)
 
+def award_label(v, custom=None):
+    labels={
+        'participant':'เข้าร่วมการแข่งขัน',
+        'champion':'ชนะเลิศ',
+        'runner_up_1':'รองชนะเลิศอันดับ 1',
+        'runner_up_2':'รองชนะเลิศอันดับ 2',
+        'runner_up_3':'รองชนะเลิศอันดับ 3',
+        'honorable':'รางวัลชมเชย',
+        'custom':(custom or 'รางวัลพิเศษ')
+    }
+    return labels.get(v or 'participant', v or 'เข้าร่วมการแข่งขัน')
 
-def age_label(value):
-    return {"youth": "เยาวชน", "general": "ทั่วไป", "senior": "อาวุโส"}.get(value, value)
+def event_display_name(e):
+    custom=(e['event_name'] or '').strip()
+    return custom or f"{category_label(e['category_type'])} {gender_label(e['gender_type'])} {age_label(e['age_group'])}"
 
+def allowed_member_counts(category): return [1] if category=='single' else ([2,3] if category=='pair' else [3,4])
 
-def event_display_name(event):
-    custom = (event["event_name"] or "").strip()
-    if custom:
-        return custom
-    return f"{category_label(event['category_type'])} {gender_label(event['gender_type'])} {age_label(event['age_group'])}"
+def suggested_member_count(category): return max(allowed_member_counts(category))
 
+def event_reg_count(event_id, include_waitlist=False):
+    conn=get_db(); q='SELECT COUNT(*) total FROM registrations WHERE event_id=?'
+    args=[event_id]
+    if not include_waitlist: q += ' AND is_waitlist=0'
+    total=conn.execute(q,args).fetchone()['total']; conn.close(); return total
 
-def get_team_size(category_type, team_size):
-    if category_type == "single":
-        return 1
-    if category_type == "pair":
-        return 2
-    return max(1, int(team_size or 1))
+def save_uploaded_file(file_obj,prefix='file'):
+    if not file_obj or not file_obj.filename: return None
+    if not allowed_file(file_obj.filename): return None
+    ext=secure_filename(file_obj.filename).rsplit('.',1)[1].lower()
+    name=f"{prefix}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}.{ext}"
+    file_obj.save(os.path.join(UPLOAD_FOLDER,name)); return name
 
+def delete_uploaded_file(name):
+    if name:
+        p=os.path.join(UPLOAD_FOLDER,name)
+        if os.path.exists(p): os.remove(p)
 
-def event_reg_count(event_id):
-    conn = get_db()
-    total = conn.execute(
-        "SELECT COUNT(*) AS total FROM registrations WHERE event_id = ?",
-        (event_id,)
-    ).fetchone()["total"]
-    conn.close()
-    return total
-
-
-def save_uploaded_file(file_obj, prefix="file"):
+def save_certificate_asset(file_obj, prefix):
     if not file_obj or not file_obj.filename:
         return None
-    if not allowed_file(file_obj.filename):
+    if not allowed_file(file_obj.filename, CERT_IMAGE_EXTENSIONS):
         return None
-    safe_name = secure_filename(file_obj.filename)
-    ext = safe_name.rsplit(".", 1)[1].lower()
-    filename = f"{prefix}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}.{ext}"
-    file_obj.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
-    return filename
+    ext=secure_filename(file_obj.filename).rsplit('.',1)[1].lower()
+    name=f"{prefix}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}.{ext}"
+    file_obj.save(os.path.join(UPLOAD_FOLDER,name))
+    return name
 
+def truthy(value): return str(value or '').strip().lower() in {'1','true','yes','y','ใช่','มี','เปิด','on'}
 
-def delete_uploaded_file(filename):
-    if not filename:
-        return
-    path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
-    if os.path.exists(path):
-        os.remove(path)
+def normalize_category(v): return {'เดี่ยว':'single','single':'single','คู่':'pair','pair':'pair','ทีม':'team','team':'team'}.get(str(v or '').strip().lower(), '')
 
+def normalize_gender(v): return {'ชาย':'male','male':'male','หญิง':'female','female':'female','ผสม':'mixed','mixed':'mixed','ไม่ระบุ':'open','open':'open'}.get(str(v or '').strip().lower(), 'open')
 
-def registration_summary_by_event(tournament_id):
-    conn = get_db()
-    events = conn.execute(
-        "SELECT * FROM events WHERE tournament_id = ? ORDER BY id ASC",
-        (tournament_id,)
-    ).fetchall()
-    rows = []
-    total = 0
-    for e in events:
-        count = conn.execute(
-            "SELECT COUNT(*) AS total FROM registrations WHERE event_id = ?",
-            (e["id"],)
-        ).fetchone()["total"]
-        total += count
-        rows.append({"event": e, "count": count})
-    conn.close()
-    return rows, total
+def normalize_age(v):
+    raw=str(v or '').strip(); return {'เยาวชน':'youth','youth':'youth','ทั่วไป':'general','general':'general','อาวุโส':'senior','senior':'senior'}.get(raw.lower(), raw or 'general')
 
+def unique_registration_code(conn):
+    while True:
+        code='REG-'+datetime.now().strftime('%y%m')+'-'+secrets.token_hex(3).upper()
+        if not conn.execute('SELECT id FROM registrations WHERE registration_code=?',(code,)).fetchone(): return code
+
+def registration_capacity_state(event):
+    active=event_reg_count(event['id'])
+    if not event['has_limit'] or int(event['max_slots'] or 0)<=0: return False, False
+    full=active >= int(event['max_slots'])
+    if not full or not event['waitlist_enabled']: return full, False
+    wait_total=event_reg_count(event['id'],True)-active
+    wait_limit=int(event['waitlist_limit'] or 0)
+    return True, bool(wait_limit<=0 or wait_total<wait_limit)
+
+def get_owned_tournament(conn,tournament_id):
+    return conn.execute('SELECT * FROM tournaments WHERE id=? AND created_by=?',(tournament_id,session.get('user_id'))).fetchone()
+
+def get_owned_event(conn,event_id):
+    return conn.execute('''SELECT e.*,t.title tournament_title,t.created_by,t.certificates_enabled,t.certificate_self_download,t.certificate_require_approval,t.cert_org,t.cert_date,t.cert_place,t.cert_signer,t.cert_signer_position,t.cert_style,t.cert_heading,t.cert_footer_note,t.cert_logo_1,t.cert_logo_2,t.cert_logo_3,t.cert_background,t.cert_signature,t.cert_stamp FROM events e JOIN tournaments t ON e.tournament_id=t.id WHERE e.id=?''',(event_id,)).fetchone()
 
 @app.context_processor
-def inject_helpers():
-    return {
-        "category_label": category_label,
-        "gender_label": gender_label,
-        "age_label": age_label,
-        "event_display_name": event_display_name,
-    }
+def helpers(): return dict(category_label=category_label,gender_label=gender_label,age_label=age_label,fee_per_label=fee_per_label,award_label=award_label,event_display_name=event_display_name,allowed_member_counts=allowed_member_counts)
 
+@app.route('/uploads/<path:filename>')
+def uploaded_file(filename): return send_from_directory(UPLOAD_FOLDER,filename)
 
-@app.route("/uploads/<path:filename>")
-def uploaded_file(filename):
-    return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
-
-
-@app.route("/")
+@app.route('/')
 def home():
-    conn = get_db()
-    tournaments = conn.execute("SELECT * FROM tournaments ORDER BY id DESC").fetchall()
-    event_map = {}
-    count_map = {}
+    conn=get_db(); tournaments=conn.execute('SELECT * FROM tournaments ORDER BY id DESC').fetchall(); event_map={}; count_map={}
     for t in tournaments:
-        events = conn.execute(
-            "SELECT * FROM events WHERE tournament_id = ? ORDER BY id ASC",
-            (t["id"],)
-        ).fetchall()
-        event_map[t["id"]] = events
-        count_map[t["id"]] = {e["id"]: event_reg_count(e["id"]) for e in events}
-    conn.close()
-    return render_template("home.html", tournaments=tournaments, event_map=event_map, count_map=count_map)
+        events=conn.execute('SELECT * FROM events WHERE tournament_id=? ORDER BY id',(t['id'],)).fetchall(); event_map[t['id']]=events
+        count_map[t['id']]={e['id']:event_reg_count(e['id']) for e in events}
+    conn.close(); return render_template('home.html',tournaments=tournaments,event_map=event_map,count_map=count_map)
 
-
-@app.route("/event/<int:event_id>/register", methods=["GET", "POST"])
+@app.route('/event/<int:event_id>/register',methods=['GET','POST'])
 def register_event(event_id):
-    conn = get_db()
-    event = conn.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
-    if not event:
-        conn.close()
-        flash("ไม่พบอีเวนต์")
-        return redirect(url_for("home"))
+    conn=get_db(); event=conn.execute('SELECT * FROM events WHERE id=?',(event_id,)).fetchone()
+    if not event: conn.close(); flash('ไม่พบอีเวนต์'); return redirect(url_for('home'))
+    tournament=conn.execute('SELECT * FROM tournaments WHERE id=?',(event['tournament_id'],)).fetchone(); conn.close()
+    reg_count=event_reg_count(event_id); full, can_waitlist=registration_capacity_state(event)
+    if request.method=='POST':
+        if not event['is_open'] or not tournament['is_open']: flash('อีเวนต์นี้ปิดรับสมัครแล้ว'); return redirect(url_for('register_event',event_id=event_id))
+        if full and not can_waitlist: flash('อีเวนต์นี้เต็มแล้ว'); return redirect(url_for('register_event',event_id=event_id))
+        member_count=int(request.form.get('member_count',suggested_member_count(event['category_type'])))
+        if member_count not in allowed_member_counts(event['category_type']): flash('จำนวนผู้เล่นไม่ตรงตามประเภทการแข่งขัน'); return redirect(url_for('register_event',event_id=event_id))
+        team_name=request.form.get('team_name','').strip(); affiliation=request.form.get('affiliation','').strip(); contact=request.form.get('contact_name','').strip(); phone=request.form.get('phone','').strip(); notes=request.form.get('notes','').strip()
+        if not contact or not phone: flash('กรุณากรอกชื่อผู้ติดต่อและเบอร์โทร'); return redirect(url_for('register_event',event_id=event_id))
+        if event['category_type']=='team' and not team_name: flash('ประเภททีมต้องกรอกชื่อทีม'); return redirect(url_for('register_event',event_id=event_id))
+        members=[]
+        for i in range(1,member_count+1):
+            n=request.form.get(f'member_name_{i}','').strip(); idc=request.form.get(f'member_idcard_{i}','').strip(); f=request.files.get(f'idcard_file_{i}'); fn=None
+            if not n: flash(f'กรุณากรอกชื่อสมาชิกคนที่ {i}'); return redirect(url_for('register_event',event_id=event_id))
+            if f and f.filename:
+                fn=save_uploaded_file(f,f'idcard_{i}')
+                if not fn: flash('ไฟล์บัตรประชาชนต้องเป็น JPG PNG WEBP หรือ PDF'); return redirect(url_for('register_event',event_id=event_id))
+            members.append((n,idc,fn))
+        slip=None; sf=request.files.get('slip_file')
+        if sf and sf.filename:
+            slip=save_uploaded_file(sf,'slip')
+            if not slip: flash('ไฟล์สลิปต้องเป็น JPG PNG WEBP หรือ PDF'); return redirect(url_for('register_event',event_id=event_id))
+        if event['has_fee'] and event['require_slip'] and not slip: flash('กรุณาแนบหลักฐานการชำระเงิน'); return redirect(url_for('register_event',event_id=event_id))
+        conn=get_db(); code=unique_registration_code(conn); wait=1 if full and can_waitlist else 0
+        rid=insert_returning_id(conn,'''INSERT INTO registrations(event_id,team_name,affiliation,contact_name,phone,slip_filename,notes,created_at,member_count,source,registration_code,status,is_waitlist) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',(event_id,team_name or None,affiliation or None,contact,phone,slip,notes,now(),member_count,'web',code,'pending',wait)); c=conn.cursor()
+        for m in members: c.execute('INSERT INTO registration_members(registration_id,member_name,member_idcard,idcard_file) VALUES(?,?,?,?)',(rid,*m))
+        conn.commit(); conn.close(); return redirect(url_for('registration_status',code=code))
+    return render_template('register_event.html',event=event,tournament=tournament,reg_count=reg_count,full=full,can_waitlist=can_waitlist,default_member_count=suggested_member_count(event['category_type']))
 
-    tournament = conn.execute("SELECT * FROM tournaments WHERE id = ?", (event["tournament_id"],)).fetchone()
-    conn.close()
+@app.route('/registration/<code>')
+def registration_status(code):
+    conn=get_db(); reg=conn.execute('''SELECT r.*,e.event_name,e.category_type,e.gender_type,e.age_group,e.has_fee,e.fee,e.fee_per,t.title tournament_title,t.certificates_enabled,t.certificate_self_download,t.certificate_require_approval FROM registrations r JOIN events e ON r.event_id=e.id JOIN tournaments t ON e.tournament_id=t.id WHERE r.registration_code=?''',(code,)).fetchone()
+    if not reg: conn.close(); abort(404)
+    members=conn.execute('SELECT * FROM registration_members WHERE registration_id=? ORDER BY id',(reg['id'],)).fetchall(); conn.close()
+    cert_ready=bool(reg['certificates_enabled'] and reg['certificate_self_download'] and (not reg['certificate_require_approval'] or reg['status']=='approved'))
+    return render_template('registration_status.html',reg=reg,members=members,cert_ready=cert_ready)
 
-    reg_count = event_reg_count(event_id)
-    member_count = get_team_size(event["category_type"], event["team_size"])
-
-    if request.method == "POST":
-        if not event["is_open"] or not tournament["is_open"]:
-            flash("อีเวนต์นี้ปิดรับสมัครแล้ว")
-            return redirect(url_for("register_event", event_id=event_id))
-
-        if reg_count >= event["max_slots"]:
-            flash("อีเวนต์นี้เต็มแล้ว")
-            return redirect(url_for("register_event", event_id=event_id))
-
-        contact_name = request.form.get("contact_name", "").strip()
-        phone = request.form.get("phone", "").strip()
-        notes = request.form.get("notes", "").strip()
-        team_name = request.form.get("team_name", "").strip()
-
-        members = []
-        for i in range(1, member_count + 1):
-            member_name = request.form.get(f"member_name_{i}", "").strip()
-            member_idcard = request.form.get(f"member_idcard_{i}", "").strip()
-            member_idcard_file = request.files.get(f"idcard_file_{i}")
-
-            if member_name:
-                idcard_file_name = None
-                if member_idcard_file and member_idcard_file.filename:
-                    idcard_file_name = save_uploaded_file(member_idcard_file, prefix=f"idcard_{i}")
-                    if not idcard_file_name:
-                        flash("อัปโหลดบัตรประชาชนได้เฉพาะไฟล์ png, jpg, jpeg, webp, pdf")
-                        return redirect(url_for("register_event", event_id=event_id))
-                members.append((member_name, member_idcard, idcard_file_name))
-
-        if not contact_name or not phone:
-            flash("กรุณากรอกชื่อผู้ติดต่อและเบอร์โทร")
-            return redirect(url_for("register_event", event_id=event_id))
-
-        if len(members) != member_count:
-            flash(f"กรุณากรอกข้อมูลสมาชิกให้ครบ {member_count} คน")
-            return redirect(url_for("register_event", event_id=event_id))
-
-        if event["category_type"] == "team" and not team_name:
-            flash("ประเภททีมต้องกรอกชื่อทีม")
-            return redirect(url_for("register_event", event_id=event_id))
-
-        slip_file = request.files.get("slip_file")
-        slip_filename = None
-        if slip_file and slip_file.filename:
-            slip_filename = save_uploaded_file(slip_file, prefix="slip")
-            if not slip_filename:
-                flash("อัปโหลดสลิปได้เฉพาะไฟล์ png, jpg, jpeg, webp, pdf")
-                return redirect(url_for("register_event", event_id=event_id))
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute(
-            """INSERT INTO registrations (event_id, team_name, contact_name, phone, slip_filename, notes, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (
-                event_id,
-                team_name or None,
-                contact_name,
-                phone,
-                slip_filename,
-                notes,
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            )
-        )
-        registration_id = c.lastrowid
-
-        for member_name, member_idcard, idcard_file_name in members:
-            c.execute(
-                "INSERT INTO registration_members (registration_id, member_name, member_idcard, idcard_file) VALUES (?, ?, ?, ?)",
-                (registration_id, member_name, member_idcard, idcard_file_name)
-            )
-
-        conn.commit()
-        conn.close()
-        flash("สมัครสำเร็จแล้ว")
-        return redirect(url_for("home"))
-
-    return render_template(
-        "register_event.html",
-        event=event,
-        tournament=tournament,
-        reg_count=reg_count,
-        member_count=member_count,
-    )
-
-
-@app.route("/login", methods=["GET", "POST"])
+@app.route('/login',methods=['GET','POST'])
 def login():
-    if request.method == "POST":
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "").strip()
+    if request.method=='POST':
+        conn=get_db(); user=conn.execute('SELECT * FROM users WHERE username=?',(request.form.get('username','').strip(),)).fetchone(); conn.close()
+        if user and check_password_hash(user['password'],request.form.get('password','')):
+            session.update(user_id=user['id'],username=user['username'],role=user['role']); flash('เข้าสู่ระบบสำเร็จ'); return redirect(url_for('admin_dashboard'))
+        flash('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง')
+    return render_template('login.html')
+@app.route('/logout')
+def logout(): session.clear(); flash('ออกจากระบบแล้ว'); return redirect(url_for('home'))
 
-        conn = get_db()
-        user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
-        conn.close()
-
-        if user and check_password_hash(user["password"], password):
-            session["user_id"] = user["id"]
-            session["username"] = user["username"]
-            session["role"] = user["role"]
-            flash("เข้าสู่ระบบสำเร็จ")
-            return redirect(url_for("admin_dashboard"))
-        flash("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง")
-
-    return render_template("login.html")
-
-
-@app.route("/logout")
-def logout():
-    session.clear()
-    flash("ออกจากระบบแล้ว")
-    return redirect(url_for("home"))
-
-
-@app.route("/admin")
+@app.route('/admin')
 def admin_dashboard():
-    if not is_logged_in():
-        flash("กรุณาเข้าสู่ระบบก่อน")
-        return redirect(url_for("login"))
-
-    conn = get_db()
-    tournaments = conn.execute(
-        "SELECT * FROM tournaments WHERE created_by = ? ORDER BY id DESC",
-        (session["user_id"],)
-    ).fetchall()
-
-    event_map = {}
-    count_map = {}
-    dashboard = {
-        "tournaments": len(tournaments),
-        "events": 0,
-        "registrations": 0,
-        "open_events": 0,
-    }
-
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); tournaments=conn.execute('SELECT * FROM tournaments WHERE created_by=? ORDER BY id DESC',(session['user_id'],)).fetchall(); event_map={}; count_map={}; dashboard={'tournaments':len(tournaments),'events':0,'registrations':0,'open_events':0}
     for t in tournaments:
-        events = conn.execute(
-            "SELECT * FROM events WHERE tournament_id = ? ORDER BY id ASC",
-            (t["id"],)
-        ).fetchall()
-        event_map[t["id"]] = events
-        count_map[t["id"]] = {}
-        dashboard["events"] += len(events)
-        for e in events:
-            c = event_reg_count(e["id"])
-            count_map[t["id"]][e["id"]] = c
-            dashboard["registrations"] += c
-            if e["is_open"]:
-                dashboard["open_events"] += 1
+        es=conn.execute('SELECT * FROM events WHERE tournament_id=? ORDER BY id',(t['id'],)).fetchall(); event_map[t['id']]=es; count_map[t['id']]={}
+        for e in es:
+            n=event_reg_count(e['id']); count_map[t['id']][e['id']]=n; dashboard['events']+=1; dashboard['registrations']+=n; dashboard['open_events']+=1 if e['is_open'] else 0
+    conn.close(); return render_template('admin_dashboard.html',tournaments=tournaments,event_map=event_map,count_map=count_map,dashboard=dashboard)
 
-    conn.close()
-    return render_template("admin_dashboard.html", tournaments=tournaments, event_map=event_map, count_map=count_map, dashboard=dashboard)
-
-
-@app.route("/admin/tournament/create", methods=["GET", "POST"])
+@app.route('/admin/tournament/create',methods=['GET','POST'])
 def create_tournament():
-    if not is_logged_in():
-        flash("กรุณาเข้าสู่ระบบก่อน")
-        return redirect(url_for("login"))
+    if not is_logged_in(): return redirect(url_for('login'))
+    if request.method=='POST':
+        title=request.form.get('title','').strip(); desc=request.form.get('description','').strip()
+        if not title: flash('กรุณากรอกชื่องานแข่งขัน'); return redirect(url_for('create_tournament'))
+        conn=get_db(); tid=insert_returning_id(conn,'INSERT INTO tournaments(title,description,created_by,created_at,is_open) VALUES(?,?,?,?,?)',(title,desc,session['user_id'],now(),1 if request.form.get('is_open') else 0)); conn.commit(); conn.close(); return redirect(url_for('manage_events',tournament_id=tid))
+    return render_template('create_tournament.html')
 
-    if request.method == "POST":
-        title = request.form.get("title", "").strip()
-        description = request.form.get("description", "").strip()
-        is_open = 1 if request.form.get("is_open") == "on" else 0
-
-        if not title:
-            flash("กรุณากรอกชื่องานแข่งขัน")
-            return redirect(url_for("create_tournament"))
-
-        conn = get_db()
-        c = conn.cursor()
-        c.execute(
-            """INSERT INTO tournaments (title, description, created_by, created_at, is_open)
-               VALUES (?, ?, ?, ?, ?)""",
-            (title, description, session["user_id"], datetime.now().strftime("%Y-%m-%d %H:%M:%S"), is_open)
-        )
-        tournament_id = c.lastrowid
-        conn.commit()
-        conn.close()
-
-        flash("สร้างงานแข่งขันเรียบร้อยแล้ว")
-        return redirect(url_for("manage_events", tournament_id=tournament_id))
-
-    return render_template("create_tournament.html")
-
-
-
-@app.route("/admin/tournament/<int:tournament_id>/edit", methods=["GET", "POST"])
+@app.route('/admin/tournament/<int:tournament_id>/edit',methods=['GET','POST'])
 def edit_tournament(tournament_id):
-    if not is_logged_in():
-        flash("กรุณาเข้าสู่ระบบก่อน")
-        return redirect(url_for("login"))
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); t=get_owned_tournament(conn,tournament_id)
+    if not t: conn.close(); flash('ไม่พบงานแข่งขัน'); return redirect(url_for('admin_dashboard'))
+    if request.method=='POST':
+        title=request.form.get('title','').strip()
+        if not title: conn.close(); flash('กรุณากรอกชื่องานแข่งขัน'); return redirect(url_for('edit_tournament',tournament_id=tournament_id))
+        conn.execute('UPDATE tournaments SET title=?,description=?,is_open=? WHERE id=?',(title,request.form.get('description','').strip(),1 if request.form.get('is_open') else 0,tournament_id)); conn.commit(); conn.close(); return redirect(url_for('admin_dashboard'))
+    conn.close(); return render_template('edit_tournament.html',tournament=t)
 
-    conn = get_db()
-    tournament = conn.execute(
-        "SELECT * FROM tournaments WHERE id = ? AND created_by = ?",
-        (tournament_id, session["user_id"])
-    ).fetchone()
-
-    if not tournament:
-        conn.close()
-        flash("ไม่พบงานแข่งขัน")
-        return redirect(url_for("admin_dashboard"))
-
-    if request.method == "POST":
-        title = request.form.get("title", "").strip()
-        description = request.form.get("description", "").strip()
-        is_open = 1 if request.form.get("is_open") == "on" else 0
-
-        if not title:
-            conn.close()
-            flash("กรุณากรอกชื่องานแข่งขัน")
-            return redirect(url_for("edit_tournament", tournament_id=tournament_id))
-
-        conn.execute(
-            "UPDATE tournaments SET title = ?, description = ?, is_open = ? WHERE id = ?",
-            (title, description, is_open, tournament_id)
-        )
-        conn.commit()
-        conn.close()
-
-        flash("แก้ไขทัวร์นาเมนต์เรียบร้อยแล้ว")
-        return redirect(url_for("admin_dashboard"))
-
-    conn.close()
-    return render_template("edit_tournament.html", tournament=tournament)
-
-
-@app.route("/admin/tournament/<int:tournament_id>/delete")
-def delete_tournament(tournament_id):
-    if not is_logged_in():
-        flash("กรุณาเข้าสู่ระบบก่อน")
-        return redirect(url_for("login"))
-
-    conn = get_db()
-    tournament = conn.execute(
-        "SELECT * FROM tournaments WHERE id = ? AND created_by = ?",
-        (tournament_id, session["user_id"])
-    ).fetchone()
-
-    if not tournament:
-        conn.close()
-        flash("ไม่พบงานแข่งขัน")
-        return redirect(url_for("admin_dashboard"))
-
-    events = conn.execute(
-        "SELECT id FROM events WHERE tournament_id = ?",
-        (tournament_id,)
-    ).fetchall()
-
-    for event in events:
-        regs = conn.execute(
-            "SELECT * FROM registrations WHERE event_id = ?",
-            (event["id"],)
-        ).fetchall()
-
-        for reg in regs:
-            members = conn.execute(
-                "SELECT idcard_file FROM registration_members WHERE registration_id = ?",
-                (reg["id"],)
-            ).fetchall()
-            for m in members:
-                idcard_file = m["idcard_file"] if "idcard_file" in m.keys() else ""
-                delete_uploaded_file(idcard_file)
-            slip_filename = reg["slip_filename"] if "slip_filename" in reg.keys() else ""
-            delete_uploaded_file(slip_filename)
-            conn.execute("DELETE FROM registration_members WHERE registration_id = ?", (reg["id"],))
-        conn.execute("DELETE FROM registrations WHERE event_id = ?", (event["id"],))
-
-    conn.execute("DELETE FROM events WHERE tournament_id = ?", (tournament_id,))
-    conn.execute("DELETE FROM tournaments WHERE id = ?", (tournament_id,))
-    conn.commit()
-    conn.close()
-
-    flash("ลบทัวร์นาเมนต์เรียบร้อยแล้ว")
-    return redirect(url_for("admin_dashboard"))
-
-
-@app.route("/admin/tournament/<int:tournament_id>/events")
+@app.route('/admin/tournament/<int:tournament_id>/events')
 def manage_events(tournament_id):
-    if not is_logged_in():
-        flash("กรุณาเข้าสู่ระบบก่อน")
-        return redirect(url_for("login"))
-
-    conn = get_db()
-    tournament = conn.execute(
-        "SELECT * FROM tournaments WHERE id = ? AND created_by = ?",
-        (tournament_id, session["user_id"])
-    ).fetchone()
-
-    if not tournament:
-        conn.close()
-        flash("ไม่พบงานแข่งขัน")
-        return redirect(url_for("admin_dashboard"))
-
-    events = conn.execute(
-        "SELECT * FROM events WHERE tournament_id = ? ORDER BY id ASC",
-        (tournament_id,)
-    ).fetchall()
-    counts = {e["id"]: event_reg_count(e["id"]) for e in events}
-    summary_rows, total_regs = registration_summary_by_event(tournament_id)
-    conn.close()
-    return render_template("manage_events.html", tournament=tournament, events=events, counts=counts, summary_rows=summary_rows, total_regs=total_regs)
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); t=get_owned_tournament(conn,tournament_id)
+    if not t: conn.close(); return redirect(url_for('admin_dashboard'))
+    events=conn.execute('SELECT * FROM events WHERE tournament_id=? ORDER BY id',(tournament_id,)).fetchall(); counts={e['id']:event_reg_count(e['id']) for e in events}; waitcounts={e['id']:event_reg_count(e['id'],True)-counts[e['id']] for e in events}; total=sum(counts.values()); conn.close()
+    return render_template('manage_events.html',tournament=t,events=events,counts=counts,waitcounts=waitcounts,total_regs=total)
 
 
-@app.route("/admin/tournament/<int:tournament_id>/event/create", methods=["GET", "POST"])
+def parse_event_form():
+    category=request.form.get('category_type','single'); has_fee=1 if request.form.get('has_fee') else 0; has_limit=1 if request.form.get('has_limit') else 0
+    fee=int(request.form.get('fee','0') or 0) if has_fee else 0; max_slots=int(request.form.get('max_slots','0') or 0) if has_limit else 0
+    return dict(event_name=request.form.get('event_name','').strip(),category_type=category,gender_type=request.form.get('gender_type','open'),age_group=request.form.get('age_group','general').strip(),team_size=suggested_member_count(category),has_fee=has_fee,fee=fee,fee_per=request.form.get('fee_per','team'),require_slip=1 if has_fee and request.form.get('require_slip') else 0,has_limit=has_limit,max_slots=max_slots,waitlist_enabled=1 if has_limit and request.form.get('waitlist_enabled') else 0,waitlist_limit=int(request.form.get('waitlist_limit','0') or 0),is_open=1 if request.form.get('is_open') else 0)
+
+@app.route('/admin/tournament/<int:tournament_id>/event/create',methods=['GET','POST'])
 def create_event(tournament_id):
-    if not is_logged_in():
-        flash("กรุณาเข้าสู่ระบบก่อน")
-        return redirect(url_for("login"))
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); t=get_owned_tournament(conn,tournament_id)
+    if not t: conn.close(); return redirect(url_for('admin_dashboard'))
+    if request.method=='POST':
+        d=parse_event_form(); cols=','.join(d.keys()); marks=','.join(['?']*len(d)); conn.execute(f'INSERT INTO events(tournament_id,{cols},created_at) VALUES(?,{marks},?)',(tournament_id,*d.values(),now())); conn.commit(); conn.close(); flash('เพิ่มอีเวนต์เรียบร้อยแล้ว'); return redirect(url_for('manage_events',tournament_id=tournament_id))
+    conn.close(); return render_template('create_event.html',tournament=t)
 
-    conn = get_db()
-    tournament = conn.execute(
-        "SELECT * FROM tournaments WHERE id = ? AND created_by = ?",
-        (tournament_id, session["user_id"])
-    ).fetchone()
-
-    if not tournament:
-        conn.close()
-        flash("ไม่พบงานแข่งขัน")
-        return redirect(url_for("admin_dashboard"))
-
-    if request.method == "POST":
-        event_name = request.form.get("event_name", "").strip()
-        category_type = request.form.get("category_type", "single").strip()
-        gender_type = request.form.get("gender_type", "male").strip()
-        age_group = request.form.get("age_group", "general").strip()
-        max_slots = request.form.get("max_slots", "0").strip()
-        fee = request.form.get("fee", "0").strip()
-        team_size = request.form.get("team_size", "1").strip()
-        is_open = 1 if request.form.get("is_open") == "on" else 0
-
-        if not max_slots.isdigit():
-            conn.close()
-            flash("กรุณากรอกจำนวนรับสมัครให้ถูกต้อง")
-            return redirect(url_for("create_event", tournament_id=tournament_id))
-
-        if not fee.isdigit():
-            fee = "0"
-
-        if category_type == "single":
-            team_size = 1
-        elif category_type == "pair":
-            team_size = 2
-        else:
-            team_size = int(team_size) if str(team_size).isdigit() and int(team_size) > 0 else 3
-
-        conn.execute(
-            """INSERT INTO events
-               (tournament_id, event_name, category_type, gender_type, age_group, max_slots, fee, team_size, is_open, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                tournament_id,
-                event_name,
-                category_type,
-                gender_type,
-                age_group,
-                int(max_slots),
-                int(fee),
-                int(team_size),
-                is_open,
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            )
-        )
-        conn.commit()
-        conn.close()
-
-        flash("เพิ่มอีเวนต์เรียบร้อยแล้ว")
-        return redirect(url_for("manage_events", tournament_id=tournament_id))
-
-    conn.close()
-    return render_template("create_event.html", tournament=tournament)
-
-
-@app.route("/admin/event/<int:event_id>/edit", methods=["GET", "POST"])
+@app.route('/admin/event/<int:event_id>/edit',methods=['GET','POST'])
 def edit_event(event_id):
-    if not is_logged_in():
-        flash("กรุณาเข้าสู่ระบบก่อน")
-        return redirect(url_for("login"))
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); e=get_owned_event(conn,event_id)
+    if not e or e['created_by']!=session['user_id']: conn.close(); return redirect(url_for('admin_dashboard'))
+    t=conn.execute('SELECT * FROM tournaments WHERE id=?',(e['tournament_id'],)).fetchone()
+    if request.method=='POST':
+        d=parse_event_form(); sets=','.join([f'{k}=?' for k in d]); conn.execute(f'UPDATE events SET {sets} WHERE id=?',(*d.values(),event_id)); conn.commit(); conn.close(); flash('แก้ไขอีเวนต์เรียบร้อยแล้ว'); return redirect(url_for('manage_events',tournament_id=e['tournament_id']))
+    conn.close(); return render_template('edit_event.html',tournament=t,event=e)
 
-    conn = get_db()
-    event = conn.execute(
-        """SELECT e.*, t.created_by
-           FROM events e
-           JOIN tournaments t ON e.tournament_id = t.id
-           WHERE e.id = ?""",
-        (event_id,)
-    ).fetchone()
-
-    if not event or event["created_by"] != session["user_id"]:
-        conn.close()
-        flash("ไม่พบอีเวนต์")
-        return redirect(url_for("admin_dashboard"))
-
-    if request.method == "POST":
-        event_name = request.form.get("event_name", "").strip()
-        category_type = request.form.get("category_type", "single").strip()
-        gender_type = request.form.get("gender_type", "male").strip()
-        age_group = request.form.get("age_group", "general").strip()
-        max_slots = request.form.get("max_slots", "0").strip()
-        fee = request.form.get("fee", "0").strip()
-        team_size = request.form.get("team_size", "1").strip()
-        is_open = 1 if request.form.get("is_open") == "on" else 0
-
-        if not max_slots.isdigit():
-            conn.close()
-            flash("กรุณากรอกจำนวนรับสมัครให้ถูกต้อง")
-            return redirect(url_for("edit_event", event_id=event_id))
-
-        if not fee.isdigit():
-            fee = "0"
-
-        if category_type == "single":
-            team_size = 1
-        elif category_type == "pair":
-            team_size = 2
-        else:
-            team_size = int(team_size) if str(team_size).isdigit() and int(team_size) > 0 else 3
-
-        conn.execute(
-            """UPDATE events
-               SET event_name = ?, category_type = ?, gender_type = ?, age_group = ?, max_slots = ?, fee = ?, team_size = ?, is_open = ?
-               WHERE id = ?""",
-            (event_name, category_type, gender_type, age_group, int(max_slots), int(fee), int(team_size), is_open, event_id)
-        )
-        conn.commit()
-        tournament_id = event["tournament_id"]
-        conn.close()
-
-        flash("แก้ไขอีเวนต์เรียบร้อยแล้ว")
-        return redirect(url_for("manage_events", tournament_id=tournament_id))
-
-    tournament = conn.execute("SELECT * FROM tournaments WHERE id = ?", (event["tournament_id"],)).fetchone()
-    conn.close()
-    return render_template("edit_event.html", tournament=tournament, event=event)
-
-
-@app.route("/admin/event/<int:event_id>/delete")
-def delete_event(event_id):
-    if not is_logged_in():
-        flash("กรุณาเข้าสู่ระบบก่อน")
-        return redirect(url_for("login"))
-
-    conn = get_db()
-    event = conn.execute(
-        """SELECT e.*, t.created_by
-           FROM events e
-           JOIN tournaments t ON e.tournament_id = t.id
-           WHERE e.id = ?""",
-        (event_id,)
-    ).fetchone()
-
-    if not event or event["created_by"] != session["user_id"]:
-        conn.close()
-        flash("ไม่พบอีเวนต์")
-        return redirect(url_for("admin_dashboard"))
-
-    regs = conn.execute("SELECT * FROM registrations WHERE event_id = ?", (event_id,)).fetchall()
-    for reg in regs:
-        members = conn.execute("SELECT idcard_file FROM registration_members WHERE registration_id = ?", (reg["id"],)).fetchall()
-        for m in members:
-            idcard_file = m["idcard_file"] if "idcard_file" in m.keys() else ""
-            delete_uploaded_file(idcard_file)
-        slip_filename = reg["slip_filename"] if "slip_filename" in reg.keys() else ""
-        delete_uploaded_file(slip_filename)
-        conn.execute("DELETE FROM registration_members WHERE registration_id = ?", (reg["id"],))
-    conn.execute("DELETE FROM registrations WHERE event_id = ?", (event_id,))
-    conn.execute("DELETE FROM events WHERE id = ?", (event_id,))
-    conn.commit()
-    tournament_id = event["tournament_id"]
-    conn.close()
-
-    flash("ลบอีเวนต์เรียบร้อยแล้ว")
-    return redirect(url_for("manage_events", tournament_id=tournament_id))
-
-
-@app.route("/admin/tournament/<int:tournament_id>/registrations")
+@app.route('/admin/tournament/<int:tournament_id>/registrations')
 def tournament_registrations(tournament_id):
-    if not is_logged_in():
-        flash("กรุณาเข้าสู่ระบบก่อน")
-        return redirect(url_for("login"))
-
-    conn = get_db()
-    tournament = conn.execute(
-        "SELECT * FROM tournaments WHERE id = ? AND created_by = ?",
-        (tournament_id, session["user_id"])
-    ).fetchone()
-
-    if not tournament:
-        conn.close()
-        flash("ไม่พบงานแข่งขัน")
-        return redirect(url_for("admin_dashboard"))
-
-    rows = conn.execute(
-        """SELECT r.*, e.event_name, e.category_type, e.gender_type, e.age_group, e.fee
-           FROM registrations r
-           JOIN events e ON r.event_id = e.id
-           WHERE e.tournament_id = ?
-           ORDER BY e.id ASC, r.id DESC""",
-        (tournament_id,)
-    ).fetchall()
-
-    members_map = {}
-    for row in rows:
-        members_map[row["id"]] = conn.execute(
-            "SELECT * FROM registration_members WHERE registration_id = ? ORDER BY id ASC",
-            (row["id"],)
-        ).fetchall()
-
-    summary_rows, total_regs = registration_summary_by_event(tournament_id)
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); t=get_owned_tournament(conn,tournament_id)
+    if not t: conn.close(); return redirect(url_for('admin_dashboard'))
+    events=conn.execute('SELECT * FROM events WHERE tournament_id=? ORDER BY age_group,category_type,gender_type,id',(tournament_id,)).fetchall()
+    selected_event_id=request.args.get('event_id',type=int)
+    selected_event=None
+    if selected_event_id:
+        selected_event=next((e for e in events if e['id']==selected_event_id),None)
+        if not selected_event: selected_event_id=None
+    query='''SELECT r.*,e.event_name,e.category_type,e.gender_type,e.age_group,e.fee,e.has_fee,e.fee_per FROM registrations r JOIN events e ON r.event_id=e.id WHERE e.tournament_id=?'''
+    args=[tournament_id]
+    if selected_event_id:
+        query += ' AND e.id=?'; args.append(selected_event_id)
+    query += ' ORDER BY e.id,r.id DESC'
+    rows=conn.execute(query,args).fetchall()
+    members_map={r['id']:conn.execute('SELECT * FROM registration_members WHERE registration_id=? ORDER BY id',(r['id'],)).fetchall() for r in rows}
+    summary=[]
+    for e in events:
+        st=conn.execute('''SELECT COUNT(*) total,
+            SUM(CASE WHEN status='approved' THEN 1 ELSE 0 END) approved,
+            SUM(CASE WHEN status!='approved' THEN 1 ELSE 0 END) pending,
+            SUM(CASE WHEN is_waitlist=1 THEN 1 ELSE 0 END) waitlist,
+            SUM(CASE WHEN award_result IS NOT NULL AND award_result!='participant' THEN 1 ELSE 0 END) awarded
+            FROM registrations WHERE event_id=?''',(e['id'],)).fetchone()
+        summary.append(dict(event=e,total=st['total'] or 0,approved=st['approved'] or 0,pending=st['pending'] or 0,waitlist=st['waitlist'] or 0,awarded=st['awarded'] or 0))
+    stats={
+        'total':len(rows),
+        'approved':sum(1 for r in rows if r['status']=='approved'),
+        'pending':sum(1 for r in rows if r['status']!='approved'),
+        'waitlist':sum(1 for r in rows if r['is_waitlist']),
+        'awarded':sum(1 for r in rows if (r['award_result'] or 'participant')!='participant')
+    }
     conn.close()
-    return render_template("tournament_registrations.html", tournament=tournament, rows=rows, members_map=members_map, summary_rows=summary_rows, total_regs=total_regs)
+    return render_template('tournament_registrations.html',tournament=t,events=events,selected_event=selected_event,selected_event_id=selected_event_id,rows=rows,members_map=members_map,summary=summary,stats=stats)
 
+@app.route('/admin/registration/<int:registration_id>/approve')
+def approve_registration(registration_id):
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); r=conn.execute('''SELECT r.*,e.tournament_id,t.created_by FROM registrations r JOIN events e ON r.event_id=e.id JOIN tournaments t ON e.tournament_id=t.id WHERE r.id=?''',(registration_id,)).fetchone()
+    if not r or r['created_by']!=session['user_id']: conn.close(); return redirect(url_for('admin_dashboard'))
+    new='pending' if r['status']=='approved' else 'approved'; conn.execute('UPDATE registrations SET status=?,approved_at=? WHERE id=?',(new,now() if new=='approved' else None,registration_id)); conn.commit(); conn.close(); flash('อัปเดตสถานะเรียบร้อยแล้ว'); return redirect(url_for('tournament_registrations',tournament_id=r['tournament_id'],event_id=r['event_id']))
 
-@app.route("/admin/event/<int:event_id>/export")
-def export_event_excel(event_id):
-    if not is_logged_in():
-        flash("กรุณาเข้าสู่ระบบก่อน")
-        return redirect(url_for("login"))
+@app.route('/admin/registration/<int:registration_id>/award',methods=['POST'])
+def update_registration_award(registration_id):
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); r=conn.execute('''SELECT r.*,e.tournament_id,t.created_by FROM registrations r JOIN events e ON r.event_id=e.id JOIN tournaments t ON e.tournament_id=t.id WHERE r.id=?''',(registration_id,)).fetchone()
+    if not r or r['created_by']!=session['user_id']: conn.close(); return redirect(url_for('admin_dashboard'))
+    allowed={'participant','champion','runner_up_1','runner_up_2','runner_up_3','honorable','custom'}
+    result=request.form.get('award_result','participant')
+    if result not in allowed: result='participant'
+    custom=request.form.get('award_custom','').strip() if result=='custom' else None
+    if result=='custom' and not custom:
+        conn.close(); flash('กรุณากรอกชื่อรางวัลพิเศษ'); return redirect(url_for('tournament_registrations',tournament_id=r['tournament_id'],event_id=r['event_id']))
+    conn.execute('UPDATE registrations SET award_result=?,award_custom=?,award_updated_at=? WHERE id=?',(result,custom,now(),registration_id))
+    conn.commit(); conn.close(); flash('บันทึกผลการแข่งขันเรียบร้อยแล้ว')
+    return redirect(url_for('tournament_registrations',tournament_id=r['tournament_id'],event_id=r['event_id']))
 
-    conn = get_db()
-    event = conn.execute(
-        """SELECT e.*, t.title AS tournament_title, t.created_by
-           FROM events e
-           JOIN tournaments t ON e.tournament_id = t.id
-           WHERE e.id = ?""",
-        (event_id,)
-    ).fetchone()
+@app.route('/admin/event/<int:event_id>/template')
+def registration_template(event_id):
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); e=get_owned_event(conn,event_id); conn.close()
+    if not e or e['created_by']!=session['user_id']: abort(404)
+    wb=openpyxl.Workbook(); ws=wb.active; ws.title='รายชื่อสมัคร'; headers=['ชื่อทีม','ต้นสังกัด','ผู้ติดต่อ','เบอร์โทร','จำนวนผู้เล่น','สมาชิก 1','เลขบัตร 1','สมาชิก 2','เลขบัตร 2','สมาชิก 3','เลขบัตร 3','สมาชิก 4','เลขบัตร 4','หมายเหตุ']; ws.append(headers); ws.append(['ตัวอย่างทีม A','โรงเรียน/ชมรม','นายผู้ติดต่อ','0812345678',suggested_member_count(e['category_type']),'ชื่อสมาชิก 1','','ชื่อสมาชิก 2','','ชื่อสมาชิก 3','','ชื่อสมาชิก 4','',''])
+    style_ws(ws); return excel_response(wb,f'event_{event_id}_registration_template.xlsx')
 
-    if not event or event["created_by"] != session["user_id"]:
-        conn.close()
-        flash("ไม่พบอีเวนต์")
-        return redirect(url_for("admin_dashboard"))
+@app.route('/admin/event/<int:event_id>/import',methods=['GET','POST'])
+def import_registrations(event_id):
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); e=get_owned_event(conn,event_id)
+    if not e or e['created_by']!=session['user_id']: conn.close(); abort(404)
+    errors=[]; imported=0
+    if request.method=='POST':
+        f=request.files.get('excel_file')
+        if not f or not allowed_file(f.filename,EXCEL_EXTENSIONS): conn.close(); flash('กรุณาเลือกไฟล์ .xlsx'); return redirect(request.url)
+        wb=openpyxl.load_workbook(f, data_only=True); ws=wb.active
+        for rowno, row in enumerate(ws.iter_rows(min_row=2,values_only=True), start=2):
+            if not any(v not in (None,'') for v in row): continue
+            vals=list(row)+['']*14; team,aff,contact,phone,count= [str(vals[i] or '').strip() for i in range(5)]
+            try: count=int(float(count))
+            except: errors.append(f'แถว {rowno}: จำนวนผู้เล่นไม่ถูกต้อง'); continue
+            if count not in allowed_member_counts(e['category_type']): errors.append(f'แถว {rowno}: จำนวนผู้เล่นไม่ตรงประเภท {category_label(e["category_type"])}'); continue
+            members=[]
+            for i in range(4):
+                name=str(vals[5+i*2] or '').strip(); idc=str(vals[6+i*2] or '').strip()
+                if name: members.append((name,idc))
+            if len(members)!=count or not contact or not phone: errors.append(f'แถว {rowno}: ข้อมูลสมาชิก ผู้ติดต่อ หรือเบอร์โทรไม่ครบ'); continue
+            full, wait=registration_capacity_state(e)
+            if full and not wait: errors.append(f'แถว {rowno}: จำนวนรับสมัครเต็มแล้ว'); continue
+            code=unique_registration_code(conn); rid=insert_returning_id(conn,'''INSERT INTO registrations(event_id,team_name,affiliation,contact_name,phone,notes,created_at,member_count,source,registration_code,status,is_waitlist) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',(event_id,team or None,aff or None,contact,phone,str(vals[13] or '').strip(),now(),count,'excel',code,'pending',1 if full and wait else 0)); c=conn.cursor()
+            for m in members: c.execute('INSERT INTO registration_members(registration_id,member_name,member_idcard) VALUES(?,?,?)',(rid,*m))
+            imported+=1
+        conn.execute('INSERT INTO import_logs(tournament_id,event_id,import_type,filename,imported_count,error_count,created_at) VALUES(?,?,?,?,?,?,?)',(e['tournament_id'],event_id,'registrations',secure_filename(f.filename),imported,len(errors),now())); conn.commit(); conn.close(); return render_template('import_result.html',title='ผลนำเข้ารายชื่อ',imported=imported,errors=errors,back_url=url_for('manage_events',tournament_id=e['tournament_id']))
+    conn.close(); return render_template('import_excel.html',title='นำเข้าทีมหรือนักกีฬา',description=f'อีเวนต์: {event_display_name(e)}',template_url=url_for('registration_template',event_id=event_id))
 
-    regs = conn.execute(
-        "SELECT * FROM registrations WHERE event_id = ? ORDER BY id ASC",
-        (event_id,)
-    ).fetchall()
+@app.route('/admin/tournament/<int:tournament_id>/event-template')
+def event_template(tournament_id):
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); t=get_owned_tournament(conn,tournament_id); conn.close()
+    if not t: abort(404)
+    wb=openpyxl.Workbook(); ws=wb.active; ws.title='อีเวนต์'; ws.append(['ชื่ออีเวนต์','ประเภท','เพศ','รุ่น','เปิดรับสมัคร','มีค่าสมัคร','ค่าสมัคร','คิดราคาต่อ','ต้องแนบสลิป','จำกัดจำนวน','จำนวนสูงสุด','เปิดสำรอง','จำนวนสำรองสูงสุด']); ws.append(['คู่ชายทั่วไป','คู่','ชาย','ทั่วไป','ใช่','ใช่',100,'ทีม','ไม่','ใช่',24,'ใช่',5]); style_ws(ws); return excel_response(wb,f'tournament_{tournament_id}_event_template.xlsx')
 
-    member_map = {}
-    max_members = 0
+@app.route('/admin/tournament/<int:tournament_id>/event-import',methods=['GET','POST'])
+def import_events(tournament_id):
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); t=get_owned_tournament(conn,tournament_id)
+    if not t: conn.close(); abort(404)
+    errors=[]; imported=0
+    if request.method=='POST':
+        f=request.files.get('excel_file')
+        if not f or not allowed_file(f.filename,EXCEL_EXTENSIONS): conn.close(); flash('กรุณาเลือกไฟล์ .xlsx'); return redirect(request.url)
+        ws=openpyxl.load_workbook(f,data_only=True).active
+        for rowno,row in enumerate(ws.iter_rows(min_row=2,values_only=True),start=2):
+            if not any(v not in (None,'') for v in row): continue
+            v=list(row)+['']*13; cat=normalize_category(v[1])
+            if not cat: errors.append(f'แถว {rowno}: ประเภทต้องเป็น เดี่ยว คู่ หรือ ทีม'); continue
+            hasfee=truthy(v[5]); haslimit=truthy(v[9])
+            try: fee=int(v[6] or 0); limit=int(v[10] or 0); waitlimit=int(v[12] or 0)
+            except: errors.append(f'แถว {rowno}: จำนวนเงินหรือจำนวนรับสมัครไม่ถูกต้อง'); continue
+            conn.execute('''INSERT INTO events(tournament_id,event_name,category_type,gender_type,age_group,max_slots,fee,team_size,is_open,created_at,has_fee,fee_per,require_slip,has_limit,waitlist_enabled,waitlist_limit) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(tournament_id,str(v[0] or '').strip(),cat,normalize_gender(v[2]),normalize_age(v[3]),limit if haslimit else 0,fee if hasfee else 0,suggested_member_count(cat),1 if truthy(v[4]) else 0,now(),1 if hasfee else 0,'person' if str(v[7] or '').strip() in {'คน','person'} else 'team',1 if truthy(v[8]) else 0,1 if haslimit else 0,1 if truthy(v[11]) else 0,waitlimit)); imported+=1
+        conn.execute('INSERT INTO import_logs(tournament_id,import_type,filename,imported_count,error_count,created_at) VALUES(?,?,?,?,?,?)',(tournament_id,'events',secure_filename(f.filename),imported,len(errors),now())); conn.commit(); conn.close(); return render_template('import_result.html',title='ผลนำเข้าอีเวนต์',imported=imported,errors=errors,back_url=url_for('manage_events',tournament_id=tournament_id))
+    conn.close(); return render_template('import_excel.html',title='นำเข้าอีเวนต์จาก Excel',description=f'งานแข่งขัน: {t["title"]}',template_url=url_for('event_template',tournament_id=tournament_id))
+
+@app.route('/admin/tournament/<int:tournament_id>/certificate-settings',methods=['GET','POST'])
+def certificate_settings(tournament_id):
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); t=get_owned_tournament(conn,tournament_id)
+    if not t: conn.close(); abort(404)
+    if request.method=='POST':
+        values={
+            'certificates_enabled':1 if request.form.get('certificates_enabled') else 0,
+            'certificate_self_download':1 if request.form.get('certificate_self_download') else 0,
+            'certificate_require_approval':1 if request.form.get('certificate_require_approval') else 0,
+            'cert_org':request.form.get('cert_org','').strip(),
+            'cert_date':request.form.get('cert_date','').strip(),
+            'cert_place':request.form.get('cert_place','').strip(),
+            'cert_signer':request.form.get('cert_signer','').strip(),
+            'cert_signer_position':request.form.get('cert_signer_position','').strip(),
+            'cert_style':request.form.get('cert_style','navy_gold') if request.form.get('cert_style') in {'navy_gold','classic_gold'} else 'navy_gold',
+            'cert_heading':request.form.get('cert_heading','').strip(),
+            'cert_footer_note':request.form.get('cert_footer_note','').strip(),
+        }
+        asset_fields=['cert_logo_1','cert_logo_2','cert_logo_3','cert_background','cert_signature','cert_stamp']
+        for field in asset_fields:
+            current=t[field]
+            if request.form.get(f'remove_{field}'):
+                delete_uploaded_file(current); current=None
+            f=request.files.get(field)
+            if f and f.filename:
+                saved=save_certificate_asset(f,field)
+                if not saved:
+                    conn.close(); flash('ไฟล์โลโก้ พื้นหลัง ลายเซ็น และตราประทับ ต้องเป็น PNG JPG JPEG หรือ WEBP'); return redirect(request.url)
+                delete_uploaded_file(current); current=saved
+            values[field]=current
+        sets=','.join([f'{key}=?' for key in values])
+        conn.execute(f'UPDATE tournaments SET {sets} WHERE id=?',(*values.values(),tournament_id))
+        conn.commit(); conn.close(); flash('บันทึกตั้งค่าและรูปแบบเกียรติบัตรแล้ว'); return redirect(url_for('certificate_settings',tournament_id=tournament_id))
+    conn.close(); return render_template('certificate_settings.html',tournament=t)
+
+@app.route('/admin/tournament/<int:tournament_id>/certificate-preview')
+def certificate_preview(tournament_id):
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); t=get_owned_tournament(conn,tournament_id); conn.close()
+    if not t: abort(404)
+    reg=dict(t)
+    reg.update({
+        'tournament_title':t['title'], 'event_name':'คู่ชาย รุ่นอายุไม่เกิน 14 ปี',
+        'category_type':'pair','gender_type':'male','age_group':'ไม่เกิน 14 ปี',
+        'affiliation':'โรงเรียนตัวอย่าง','award_result':'champion','award_custom':'',
+    })
+    return render_template('certificate.html',reg=reg,member={'member_name':'นายตัวอย่าง ผู้เข้าแข่งขัน'},verification_code=None,team_mode=False,preview_mode=True)
+
+def cert_access(reg):
+    return bool(reg['certificates_enabled'] and (is_logged_in() or (reg['certificate_self_download'] and (not reg['certificate_require_approval'] or reg['status']=='approved'))))
+
+def get_or_create_cert(conn,registration_id,member_id=None,ctype='individual'):
+    if member_id is None:
+        r=conn.execute('SELECT * FROM certificates WHERE registration_id=? AND member_id IS NULL AND certificate_type=?',(registration_id,ctype)).fetchone()
+    else:
+        r=conn.execute('SELECT * FROM certificates WHERE registration_id=? AND member_id=? AND certificate_type=?',(registration_id,member_id,ctype)).fetchone()
+    if r: return r['verification_code']
+    code='CERT-'+datetime.now().strftime('%y')+'-'+secrets.token_hex(4).upper(); conn.execute('INSERT INTO certificates(registration_id,member_id,certificate_type,verification_code,issued_at) VALUES(?,?,?,?,?)',(registration_id,member_id,ctype,code,now())); conn.commit(); return code
+
+def get_cert_data(registration_id,member_id=None,ctype='individual'):
+    conn=get_db(); reg=conn.execute('''SELECT r.*,e.event_name,e.category_type,e.gender_type,e.age_group,t.title tournament_title,t.certificates_enabled,t.certificate_self_download,t.certificate_require_approval,t.cert_org,t.cert_date,t.cert_place,t.cert_signer,t.cert_signer_position,t.cert_style,t.cert_heading,t.cert_footer_note,t.cert_logo_1,t.cert_logo_2,t.cert_logo_3,t.cert_background,t.cert_signature,t.cert_stamp FROM registrations r JOIN events e ON r.event_id=e.id JOIN tournaments t ON e.tournament_id=t.id WHERE r.id=?''',(registration_id,)).fetchone()
+    if not reg or not cert_access(reg): conn.close(); abort(403)
+    member=conn.execute('SELECT * FROM registration_members WHERE id=? AND registration_id=?',(member_id,registration_id)).fetchone() if member_id else None
+    code=get_or_create_cert(conn,registration_id,member_id,ctype); conn.close(); return reg,member,code
+
+@app.route('/certificate/<int:registration_id>/member/<int:member_id>')
+def certificate_member(registration_id,member_id):
+    reg,member,code=get_cert_data(registration_id,member_id,'individual'); return render_template('certificate.html',reg=reg,member=member,verification_code=code,team_mode=False)
+@app.route('/certificate/<int:registration_id>/team')
+def certificate_team(registration_id):
+    reg,member,code=get_cert_data(registration_id,None,'team'); return render_template('certificate.html',reg=reg,member=None,verification_code=code,team_mode=True)
+
+@app.route('/admin/event/<int:event_id>/certificates/print')
+def print_event_certificates(event_id):
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); event=get_owned_event(conn,event_id)
+    if not event or event['created_by']!=session['user_id']: conn.close(); abort(404)
+    if not event['certificates_enabled']:
+        conn.close(); flash('กรุณาเปิดใช้งานเกียรติบัตรก่อน'); return redirect(url_for('certificate_settings',tournament_id=event['tournament_id']))
+    regs=conn.execute('''SELECT r.*,e.event_name,e.category_type,e.gender_type,e.age_group,
+        t.title tournament_title,t.certificates_enabled,t.certificate_self_download,t.certificate_require_approval,
+        t.cert_org,t.cert_date,t.cert_place,t.cert_signer,t.cert_signer_position,t.cert_style,t.cert_heading,t.cert_footer_note,
+        t.cert_logo_1,t.cert_logo_2,t.cert_logo_3,t.cert_background,t.cert_signature,t.cert_stamp
+        FROM registrations r JOIN events e ON r.event_id=e.id JOIN tournaments t ON e.tournament_id=t.id
+        WHERE r.event_id=? AND r.status='approved' AND r.is_waitlist=0 ORDER BY r.id''',(event_id,)).fetchall()
+    certificates=[]
     for reg in regs:
-        members = conn.execute(
-            "SELECT * FROM registration_members WHERE registration_id = ? ORDER BY id ASC",
-            (reg["id"],)
-        ).fetchall()
-        member_map[reg["id"]] = members
-        max_members = max(max_members, len(members))
+        members=conn.execute('SELECT * FROM registration_members WHERE registration_id=? ORDER BY id',(reg['id'],)).fetchall()
+        for member in members:
+            code=get_or_create_cert(conn,reg['id'],member['id'],'individual')
+            certificates.append({'reg':reg,'member':member,'verification_code':code,'team_mode':False})
     conn.close()
+    if not certificates:
+        flash('ยังไม่มีรายชื่อที่อนุมัติแล้วในอีเวนต์นี้'); return redirect(url_for('tournament_registrations',tournament_id=event['tournament_id'],event_id=event_id))
+    return render_template('certificate_bulk.html',certificates=certificates,event=event)
 
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "รายชื่อสมัคร"
+@app.route('/certificate/<code>/qr.png')
+def certificate_qr(code):
+    conn=get_db(); cert=conn.execute('SELECT id FROM certificates WHERE verification_code=?',(code,)).fetchone(); conn.close()
+    if not cert: abort(404)
+    img=qrcode.make(url_for('verify_certificate',code=code,_external=True)); out=BytesIO(); img.save(out,format='PNG'); out.seek(0)
+    return send_file(out,mimetype='image/png')
 
-    headers = [
-        "ลำดับ", "งานแข่งขัน", "อีเวนต์", "ประเภท", "เพศ", "รุ่น",
-        "ค่าสมัคร", "ชื่อทีม", "ผู้ติดต่อ", "เบอร์โทร", "สลิป", "หมายเหตุ", "สมัครเมื่อ"
-    ]
-    for i in range(1, max_members + 1):
-        headers.extend([f"สมาชิก {i}", f"เลขบัตรสมาชิก {i}", f"ไฟล์บัตรสมาชิก {i}"])
-    ws.append(headers)
+@app.route('/verify/<code>')
+def verify_certificate(code):
+    conn=get_db(); cert=conn.execute('''SELECT c.*,r.team_name,r.affiliation,r.award_result,r.award_custom,m.member_name,e.event_name,e.category_type,e.gender_type,e.age_group,t.title tournament_title FROM certificates c JOIN registrations r ON c.registration_id=r.id LEFT JOIN registration_members m ON c.member_id=m.id JOIN events e ON r.event_id=e.id JOIN tournaments t ON e.tournament_id=t.id WHERE c.verification_code=?''',(code,)).fetchone(); conn.close(); return render_template('verify_certificate.html',cert=cert,code=code)
 
-    event_name = event_display_name(event)
-    for idx, reg in enumerate(regs, start=1):
-        team_name = reg["team_name"] if "team_name" in reg.keys() else ""
-        contact_name = reg["contact_name"] if "contact_name" in reg.keys() else ""
-        phone = reg["phone"] if "phone" in reg.keys() else ""
-        slip_filename = reg["slip_filename"] if "slip_filename" in reg.keys() else ""
-        notes = reg["notes"] if "notes" in reg.keys() else ""
-        created_at = reg["created_at"] if "created_at" in reg.keys() else ""
+@app.route('/admin/event/<int:event_id>/export')
+def export_event_excel(event_id):
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); e=get_owned_event(conn,event_id)
+    if not e or e['created_by']!=session['user_id']: conn.close(); abort(404)
+    regs=conn.execute('SELECT * FROM registrations WHERE event_id=? ORDER BY id',(event_id,)).fetchall(); wb=openpyxl.Workbook(); ws=wb.active; ws.title='รายชื่อสมัคร'; ws.append(['ลำดับ','รหัสสมัคร','อีเวนต์','ชื่อทีม','ต้นสังกัด','ผู้ติดต่อ','เบอร์โทร','จำนวนผู้เล่น','สถานะ','ผลการแข่งขัน','สำรอง','แหล่งข้อมูล','สมาชิก 1','เลขบัตร 1','สมาชิก 2','เลขบัตร 2','สมาชิก 3','เลขบัตร 3','สมาชิก 4','เลขบัตร 4','หมายเหตุ'])
+    for idx,r in enumerate(regs,1):
+        ms=conn.execute('SELECT * FROM registration_members WHERE registration_id=? ORDER BY id',(r['id'],)).fetchall(); row=[idx,r['registration_code'],event_display_name(e),r['team_name'] or '',r['affiliation'] or '',r['contact_name'],r['phone'],r['member_count'],r['status'],award_label(r['award_result'],r['award_custom']),'ใช่' if r['is_waitlist'] else 'ไม่',r['source']]
+        for i in range(4): row += [ms[i]['member_name'],ms[i]['member_idcard'] or ''] if i<len(ms) else ['','']
+        row += [r['notes'] or '']; ws.append(row)
+    conn.close(); style_ws(ws); return excel_response(wb,f'event_{event_id}_registrations.xlsx')
 
-        row = [
-            idx,
-            event["tournament_title"],
-            event_name,
-            category_label(event["category_type"]),
-            gender_label(event["gender_type"]),
-            age_label(event["age_group"]),
-            event["fee"],
-            team_name or "",
-            contact_name or "",
-            phone or "",
-            slip_filename or "",
-            notes or "",
-            created_at or "",
-        ]
-        members = member_map[reg["id"]]
-        for m in members:
-            member_name = m["member_name"] if "member_name" in m.keys() else ""
-            member_idcard = m["member_idcard"] if "member_idcard" in m.keys() else ""
-            idcard_file_value = m["idcard_file"] if "idcard_file" in m.keys() else ""
-            row.extend([member_name or "", member_idcard or "", idcard_file_value or ""])
-        for _ in range(max_members - len(members)):
-            row.extend(["", "", ""])
-        ws.append(row)
-
+def style_ws(ws):
+    for cell in ws[1]: cell.font=Font(bold=True); cell.fill=PatternFill('solid',fgColor='DDEBFF'); cell.alignment=Alignment(horizontal='center')
     for col in ws.columns:
-        max_len = 0
-        letter = col[0].column_letter
-        for cell in col:
-            val = str(cell.value) if cell.value is not None else ""
-            max_len = max(max_len, len(val))
-        ws.column_dimensions[letter].width = min(max_len + 2, 30)
+        letter=col[0].column_letter; ws.column_dimensions[letter].width=min(max(12,max(len(str(c.value or '')) for c in col)+2),35)
+    ws.freeze_panes='A2'; ws.auto_filter.ref=ws.dimensions
 
-    output = BytesIO()
-    wb.save(output)
-    output.seek(0)
+def excel_response(wb,name):
+    out=BytesIO(); wb.save(out); out.seek(0); return send_file(out,as_attachment=True,download_name=name,mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
-    return send_file(
-        output,
-        as_attachment=True,
-        download_name=f"event_{event_id}_registrations.xlsx",
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-
-
-@app.route("/admin/registration/<int:registration_id>/delete")
+@app.route('/admin/registration/<int:registration_id>/delete')
 def delete_registration(registration_id):
-    if not is_logged_in():
-        flash("กรุณาเข้าสู่ระบบก่อน")
-        return redirect(url_for("login"))
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); r=conn.execute('''SELECT r.*,e.tournament_id,t.created_by FROM registrations r JOIN events e ON r.event_id=e.id JOIN tournaments t ON e.tournament_id=t.id WHERE r.id=?''',(registration_id,)).fetchone()
+    if not r or r['created_by']!=session['user_id']: conn.close(); return redirect(url_for('admin_dashboard'))
+    for m in conn.execute('SELECT idcard_file FROM registration_members WHERE registration_id=?',(registration_id,)).fetchall(): delete_uploaded_file(m['idcard_file'])
+    delete_uploaded_file(r['slip_filename']); conn.execute('DELETE FROM certificates WHERE registration_id=?',(registration_id,)); conn.execute('DELETE FROM registration_members WHERE registration_id=?',(registration_id,)); conn.execute('DELETE FROM registrations WHERE id=?',(registration_id,)); conn.commit(); conn.close(); flash('ลบผู้สมัครเรียบร้อยแล้ว'); return redirect(url_for('tournament_registrations',tournament_id=r['tournament_id'],event_id=r['event_id']))
 
-    conn = get_db()
-    row = conn.execute(
-        """SELECT r.*, e.tournament_id, t.created_by
-           FROM registrations r
-           JOIN events e ON r.event_id = e.id
-           JOIN tournaments t ON e.tournament_id = t.id
-           WHERE r.id = ?""",
-        (registration_id,)
-    ).fetchone()
+@app.route('/admin/event/<int:event_id>/delete')
+def delete_event(event_id):
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); e=get_owned_event(conn,event_id)
+    if not e or e['created_by']!=session['user_id']: conn.close(); return redirect(url_for('admin_dashboard'))
+    regs=conn.execute('SELECT id FROM registrations WHERE event_id=?',(event_id,)).fetchall(); conn.close()
+    for r in regs: delete_registration_internal(r['id'])
+    conn=get_db(); conn.execute('DELETE FROM events WHERE id=?',(event_id,)); conn.commit(); conn.close(); flash('ลบอีเวนต์เรียบร้อยแล้ว'); return redirect(url_for('manage_events',tournament_id=e['tournament_id']))
 
-    if not row or row["created_by"] != session["user_id"]:
-        conn.close()
-        flash("ไม่พบข้อมูลผู้สมัคร")
-        return redirect(url_for("admin_dashboard"))
-
-    members = conn.execute(
-        "SELECT idcard_file FROM registration_members WHERE registration_id = ?",
-        (registration_id,)
-    ).fetchall()
-    for m in members:
-        idcard_file = m["idcard_file"] if "idcard_file" in m.keys() else ""
-        delete_uploaded_file(idcard_file)
-    slip_filename = row["slip_filename"] if "slip_filename" in row.keys() else ""
-    delete_uploaded_file(slip_filename)
-
-    conn.execute("DELETE FROM registration_members WHERE registration_id = ?", (registration_id,))
-    conn.execute("DELETE FROM registrations WHERE id = ?", (registration_id,))
-    conn.commit()
-    tournament_id = row["tournament_id"]
+def delete_registration_internal(rid):
+    conn=get_db(); r=conn.execute('SELECT * FROM registrations WHERE id=?',(rid,)).fetchone()
+    if r:
+        for m in conn.execute('SELECT idcard_file FROM registration_members WHERE registration_id=?',(rid,)).fetchall(): delete_uploaded_file(m['idcard_file'])
+        delete_uploaded_file(r['slip_filename']); conn.execute('DELETE FROM certificates WHERE registration_id=?',(rid,)); conn.execute('DELETE FROM registration_members WHERE registration_id=?',(rid,)); conn.execute('DELETE FROM registrations WHERE id=?',(rid,)); conn.commit()
     conn.close()
 
-    flash("ลบผู้สมัครเรียบร้อยแล้ว")
-    return redirect(url_for("tournament_registrations", tournament_id=tournament_id))
+@app.route('/admin/tournament/<int:tournament_id>/delete')
+def delete_tournament(tournament_id):
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); t=get_owned_tournament(conn,tournament_id)
+    if not t: conn.close(); return redirect(url_for('admin_dashboard'))
+    eventids=[e['id'] for e in conn.execute('SELECT id FROM events WHERE tournament_id=?',(tournament_id,)).fetchall()]; conn.close()
+    for eid in eventids:
+        conn=get_db(); regs=conn.execute('SELECT id FROM registrations WHERE event_id=?',(eid,)).fetchall(); conn.close()
+        for r in regs: delete_registration_internal(r['id'])
+    conn=get_db(); conn.execute('DELETE FROM events WHERE tournament_id=?',(tournament_id,)); conn.execute('DELETE FROM tournaments WHERE id=?',(tournament_id,)); conn.commit(); conn.close(); flash('ลบงานแข่งขันเรียบร้อยแล้ว'); return redirect(url_for('admin_dashboard'))
 
+@app.route('/health')
+def health():
+    conn=get_db(); conn.execute('SELECT 1').fetchone(); conn.close()
+    return jsonify(status='ok', database='postgresql' if IS_POSTGRES else 'sqlite')
 
-if __name__ == "__main__":
-    init_db()
-    port = int(os.environ.get("PORT", 8000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+init_db()
+
+if __name__=='__main__':
+    app.run(host='0.0.0.0',port=int(os.environ.get('PORT',8000)),debug=True)

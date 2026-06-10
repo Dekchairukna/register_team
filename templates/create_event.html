@@ -1,61 +1,22 @@
-{% extends 'base.html' %}
-{% block title %}เพิ่มอีเวนต์{% endblock %}
-{% block content %}
-<div class="card form-card">
-    <h1>เพิ่มอีเวนต์ย่อย</h1>
-    <h2>{{ tournament['title'] }}</h2>
-
-    <form method="post">
-        <label>ชื่ออีเวนต์ (ถ้าไม่กรอก ระบบจะสร้างจาก ประเภท+เพศ+รุ่น)</label>
-        <input type="text" name="event_name" placeholder="เช่น เดี่ยวชายเยาวชน">
-
-        <label>ประเภท</label>
-        <select name="category_type" id="category_type" onchange="toggleTeamSize()">
-            <option value="single">เดี่ยว</option>
-            <option value="pair">คู่</option>
-            <option value="team">ทีม</option>
-        </select>
-
-        <label>เพศ</label>
-        <select name="gender_type">
-            <option value="male">ชาย</option>
-            <option value="female">หญิง</option>
-            <option value="mixed">ผสม</option>
-        </select>
-
-        <label>รุ่น</label>
-        <select name="age_group">
-            <option value="youth">เยาวชน</option>
-            <option value="general">ทั่วไป</option>
-            <option value="senior">อาวุโส</option>
-        </select>
-
-        <div id="team_size_wrap" style="display:none;">
-            <label>จำนวนสมาชิกต่อทีม</label>
-            <input type="number" name="team_size" min="2" value="3">
-        </div>
-
-        <label>จำนวนที่รับสมัคร</label>
-        <input type="number" name="max_slots" min="1" required>
-
-        <label>ค่าสมัคร (บาท)</label>
-        <input type="number" name="fee" min="0" value="0" required>
-
-        <label class="inline-check">
-            <input type="checkbox" name="is_open" checked> เปิดรับสมัคร
-        </label>
-
-        <button type="submit">บันทึกอีเวนต์</button>
-        <a href="{{ url_for('manage_events', tournament_id=tournament['id']) }}" class="btn btn-secondary">กลับ</a>
-    </form>
-</div>
-
+{% extends 'base.html' %}{% block title %}เพิ่มอีเวนต์{% endblock %}{% block content %}
+<div class="card form-card"><h1>เพิ่มอีเวนต์ย่อย</h1><h2>{{ tournament['title'] }}</h2>
+<form method="post">
+<label>ชื่ออีเวนต์</label><input name="event_name" placeholder="เช่น คู่ชายทั่วไป">
+<label>ประเภท</label><select name="category_type" id="category_type" onchange="updateMemberHint()"><option value="single">เดี่ยว</option><option value="pair">คู่</option><option value="team">ทีม</option></select>
+<p id="member_hint" class="muted"></p>
+<label>เพศ</label><select name="gender_type"><option value="male">ชาย</option><option value="female">หญิง</option><option value="mixed">ผสม</option><option value="open">ไม่ระบุ</option></select>
+<label>รุ่น</label><input name="age_group" value="ทั่วไป" placeholder="เช่น ไม่เกิน 17 ปี, ทั่วไป, อาวุโส 40+">
+<hr><label class="inline-check"><input type="checkbox" name="has_fee" id="has_fee" onchange="toggleFee()"> มีค่าสมัคร</label>
+<div id="fee_wrap" style="display:none"><label>ค่าสมัคร (บาท)</label><input type="number" min="0" name="fee" value="0"><label>คิดราคาต่อ</label><select name="fee_per"><option value="team">ทีม</option><option value="person">คน</option></select><label class="inline-check"><input type="checkbox" name="require_slip"> บังคับแนบสลิป</label></div>
+<hr><label class="inline-check"><input type="checkbox" name="has_limit" id="has_limit" onchange="toggleLimit()"> จำกัดจำนวนผู้สมัคร</label>
+<div id="limit_wrap" style="display:none"><label>จำนวนสูงสุด</label><input type="number" min="1" name="max_slots" value="16"><label class="inline-check"><input type="checkbox" name="waitlist_enabled" id="waitlist_enabled" onchange="toggleWait()"> เปิดรายชื่อสำรองเมื่อเต็ม</label><div id="wait_wrap" style="display:none"><label>จำนวนสำรองสูงสุด (0 = ไม่จำกัด)</label><input type="number" min="0" name="waitlist_limit" value="0"></div></div>
+<hr><label class="inline-check"><input type="checkbox" name="is_open" checked> เปิดรับสมัคร</label>
+<button type="submit">บันทึกอีเวนต์</button> <a class="btn btn-secondary" href="{{ url_for('manage_events',tournament_id=tournament['id']) }}">กลับ</a>
+</form></div>
 <script>
-function toggleTeamSize() {
-    const type = document.getElementById('category_type').value;
-    const wrap = document.getElementById('team_size_wrap');
-    wrap.style.display = type === 'team' ? 'block' : 'none';
-}
-toggleTeamSize();
-</script>
-{% endblock %}
+function updateMemberHint(){const t=document.getElementById('category_type').value;document.getElementById('member_hint').textContent=t==='single'?'ผู้สมัครกรอกนักกีฬา 1 คน':(t==='pair'?'ผู้สมัครเลือกกรอกได้ 2 หรือ 3 คน โดยเสนอ 3 คนก่อน':'ผู้สมัครเลือกกรอกได้ 3 หรือ 4 คน โดยเสนอ 4 คนก่อน')}
+function toggleFee(){document.getElementById('fee_wrap').style.display=document.getElementById('has_fee').checked?'block':'none'}
+function toggleLimit(){document.getElementById('limit_wrap').style.display=document.getElementById('has_limit').checked?'block':'none'}
+function toggleWait(){document.getElementById('wait_wrap').style.display=document.getElementById('waitlist_enabled').checked?'block':'none'}
+updateMemberHint();toggleFee();toggleLimit();toggleWait();
+</script>{% endblock %}
