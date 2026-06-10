@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, redirect, url_for, session, flash, send_from_directory, send_file, abort, jsonify
-import sqlite3, os, uuid, secrets
+import sqlite3, os, uuid, secrets, json, tempfile, time
 from datetime import datetime
 from io import BytesIO
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -26,6 +26,8 @@ app.secret_key = os.environ.get('SECRET_KEY', 'change-this-secret-key')
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 15 * 1024 * 1024
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+BULK_IMPORT_CACHE_FOLDER = os.environ.get('BULK_IMPORT_CACHE_FOLDER', os.path.join(tempfile.gettempdir(), 'register_team_bulk_imports'))
+os.makedirs(BULK_IMPORT_CACHE_FOLDER, exist_ok=True)
 
 
 class PostgresCursor:
@@ -458,23 +460,13 @@ def import_registrations(event_id):
     conn.close(); return render_template('import_excel.html',title='นำเข้าทีมหรือนักกีฬา',description=f'อีเวนต์: {event_display_name(e)}',template_url=url_for('registration_template',event_id=event_id))
 
 
-@app.route('/admin/tournament/<int:tournament_id>/registration-template-all')
-def bulk_registration_template(tournament_id):
-    """ดาวน์โหลด Excel ไฟล์เดียวสำหรับกรอกรายชื่อผู้สมัครทุกอีเวนต์ในงาน"""
-    if not is_logged_in(): return redirect(url_for('login'))
-    conn=get_db(); t=get_owned_tournament(conn,tournament_id)
-    if not t: conn.close(); abort(404)
-    events=conn.execute('SELECT * FROM events WHERE tournament_id=? ORDER BY age_group,category_type,gender_type,id',(tournament_id,)).fetchall(); conn.close()
-    if not events:
-        flash('กรุณาสร้างอีเวนต์ก่อนดาวน์โหลดไฟล์ตัวอย่างรายชื่อรวม')
-        return redirect(url_for('manage_events',tournament_id=tournament_id))
+def build_bulk_registration_workbook(events):
+    """สร้าง Excel รายชื่อรวม ใช้ได้ทั้งฝั่งแอดมินและผู้สมัครทั่วไป"""
     wb=openpyxl.Workbook(); ws=wb.active; ws.title='รายชื่อสมัครรวม'
     headers=['รหัสอีเวนต์','ชื่ออีเวนต์','ชื่อทีม','ต้นสังกัด','ผู้ติดต่อ','เบอร์โทร','จำนวนผู้เล่น','สมาชิก 1','เลขบัตร 1','สมาชิก 2','เลขบัตร 2','สมาชิก 3','เลขบัตร 3','สมาชิก 4','เลขบัตร 4','หมายเหตุ']
     ws.append(headers)
-    # ใส่แถวว่างอย่างน้อยหนึ่งแถวต่ออีเวนต์ ผู้ใช้สามารถคัดลอกแถวเดิมเพิ่มได้
     for e in events:
         ws.append([e['id'],event_display_name(e),'','','','',suggested_member_count(e['category_type'], e['gender_type']),'','','','','','','','',''])
-    # เตรียมแถวว่างเพิ่มเติมสำหรับกรอกหลายทีม
     for _ in range(max(50, len(events)*3)):
         ws.append(['','','','','','','','','','','','','','','',''])
     ref=wb.create_sheet('รายการอีเวนต์')
@@ -488,12 +480,24 @@ def bulk_registration_template(tournament_id):
     guide.append(['3. หากมีหลายทีมในอีเวนต์เดียว ให้คัดลอกแถวของอีเวนต์นั้นเพิ่ม'])
     guide.append(['4. เดี่ยวรับ 1 คน, คู่ชาย/คู่หญิงรับ 2 หรือ 3 คน, คู่ผสมรับเฉพาะ 2 คน, ทีมรับ 3 หรือ 4 คน'])
     guide.append(['5. ชื่อทีมบังคับเฉพาะประเภททีม แต่กรอกได้ทุกประเภท'])
-    guide.append(['6. ห้ามแก้ชื่อหัวตาราง และใช้ไฟล์ .xlsx เท่านั้น'])
+    guide.append(['6. ผู้ติดต่อและเบอร์โทรกรอกใน Excel หรือกรอกค่าเริ่มต้นตอนอัปโหลดก็ได้'])
+    guide.append(['7. ห้ามแก้ชื่อหัวตาราง และใช้ไฟล์ .xlsx เท่านั้น'])
     style_ws(ws); style_ws(ref)
     guide.column_dimensions['A'].width=110
     ws.freeze_panes='A2'; ws.auto_filter.ref=ws.dimensions
-    return excel_response(wb,f'tournament_{tournament_id}_all_registration_template.xlsx')
+    return wb
 
+@app.route('/admin/tournament/<int:tournament_id>/registration-template-all')
+def bulk_registration_template(tournament_id):
+    """ดาวน์โหลด Excel ไฟล์เดียวสำหรับกรอกรายชื่อผู้สมัครทุกอีเวนต์ในงาน"""
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); t=get_owned_tournament(conn,tournament_id)
+    if not t: conn.close(); abort(404)
+    events=conn.execute('SELECT * FROM events WHERE tournament_id=? ORDER BY age_group,category_type,gender_type,id',(tournament_id,)).fetchall(); conn.close()
+    if not events:
+        flash('กรุณาสร้างอีเวนต์ก่อนดาวน์โหลดไฟล์ตัวอย่างรายชื่อรวม')
+        return redirect(url_for('manage_events',tournament_id=tournament_id))
+    return excel_response(build_bulk_registration_workbook(events),f'tournament_{tournament_id}_all_registration_template.xlsx')
 
 def _event_lookup_for_bulk_import(events):
     by_id={int(e['id']):e for e in events}
@@ -571,6 +575,149 @@ def import_registrations_all(tournament_id):
         return render_template('import_result.html',title='ผลนำเข้ารายชื่อรวมทุกอีเวนต์',imported=imported,errors=errors,event_summary=event_summary,back_url=url_for('manage_events',tournament_id=tournament_id))
     conn.close()
     return render_template('import_excel.html',title='นำเข้ารายชื่อรวมทุกอีเวนต์',description=f'งานแข่งขัน: {t["title"]} — ใช้ Excel ไฟล์เดียว ระบบจะแยกรายชื่อเข้าทุกอีเวนต์ให้อัตโนมัติ',template_url=url_for('bulk_registration_template',tournament_id=tournament_id))
+
+
+def _public_tournament_and_events(tournament_id):
+    conn=get_db()
+    tournament=conn.execute('SELECT * FROM tournaments WHERE id=?',(tournament_id,)).fetchone()
+    if not tournament:
+        conn.close(); return None,[]
+    events=conn.execute('SELECT * FROM events WHERE tournament_id=? AND is_open=1 ORDER BY age_group,category_type,gender_type,id',(tournament_id,)).fetchall()
+    conn.close(); return tournament,events
+
+
+def _save_public_bulk_cache(payload):
+    token=secrets.token_urlsafe(24)
+    path=os.path.join(BULK_IMPORT_CACHE_FOLDER,token+'.json')
+    with open(path,'w',encoding='utf-8') as f: json.dump(payload,f,ensure_ascii=False)
+    return token
+
+
+def _load_public_bulk_cache(token,delete=False):
+    if not token or not all(ch.isalnum() or ch in '-_' for ch in token): return None
+    path=os.path.join(BULK_IMPORT_CACHE_FOLDER,token+'.json')
+    if not os.path.exists(path): return None
+    try:
+        if time.time()-os.path.getmtime(path)>6*60*60:
+            os.remove(path); return None
+        with open(path,'r',encoding='utf-8') as f: payload=json.load(f)
+        if delete: os.remove(path)
+        return payload
+    except Exception:
+        return None
+
+
+def _parse_public_bulk_sheet(events,ws,default_contact='',default_phone=''):
+    by_id,by_name=_event_lookup_for_bulk_import(events)
+    errors=[]; records=[]
+    for rowno,row in enumerate(ws.iter_rows(min_row=2,values_only=True),start=2):
+        if not any(v not in (None,'') for v in row): continue
+        vals=list(row)+['']*16
+        event_id=_int_from_excel(vals[0]); event_name=str(vals[1] or '').strip()
+        e=by_id.get(event_id) if event_id is not None else None
+        if not e and event_name:
+            matches=by_name.get(event_name,[])
+            if len(matches)==1: e=matches[0]
+            elif len(matches)>1:
+                errors.append(f'แถว {rowno}: ชื่ออีเวนต์ซ้ำกัน กรุณาระบุรหัสอีเวนต์'); continue
+        if not e:
+            errors.append(f'แถว {rowno}: ไม่พบอีเวนต์ที่เปิดรับสมัคร กรุณาตรวจรหัสหรือชื่ออีเวนต์'); continue
+        team=str(vals[2] or '').strip(); aff=str(vals[3] or '').strip()
+        contact=str(vals[4] or '').strip() or default_contact
+        phone=str(vals[5] or '').strip() or default_phone
+        count=_int_from_excel(vals[6])
+        if count is None:
+            errors.append(f'แถว {rowno}: จำนวนผู้เล่นไม่ถูกต้อง'); continue
+        if count not in allowed_member_counts(e['category_type'],e['gender_type']):
+            allowed='/'.join(str(n) for n in allowed_member_counts(e['category_type'],e['gender_type']))
+            errors.append(f'แถว {rowno}: {event_display_name(e)} รับผู้เล่น {allowed} คน'); continue
+        if e['category_type']=='team' and not team:
+            errors.append(f'แถว {rowno}: ประเภททีมต้องกรอกชื่อทีม'); continue
+        members=[]
+        for i in range(4):
+            name=str(vals[7+i*2] or '').strip(); idc=str(vals[8+i*2] or '').strip()
+            if name: members.append({'name':name,'idcard':idc})
+        if len(members)!=count:
+            errors.append(f'แถว {rowno}: จำนวนรายชื่อสมาชิกไม่ตรงกับจำนวนผู้เล่น'); continue
+        if not contact or not phone:
+            errors.append(f'แถว {rowno}: กรุณากรอกผู้ติดต่อและเบอร์โทรใน Excel หรือกรอกค่าเริ่มต้นก่อนอัปโหลด'); continue
+        records.append({'rowno':rowno,'event_id':int(e['id']),'event_name':event_display_name(e),'category_type':e['category_type'],'gender_type':e['gender_type'],'team_name':team,'affiliation':aff,'contact_name':contact,'phone':phone,'member_count':count,'members':members,'notes':str(vals[15] or '').strip()})
+    return records,errors
+
+
+def _preview_capacity(records,events):
+    event_map={int(e['id']):e for e in events}; planned_active={}; planned_wait={}; accepted=[]; errors=[]
+    for record in records:
+        e=event_map.get(int(record['event_id']))
+        if not e or not e['is_open']:
+            errors.append(f"แถว {record['rowno']}: อีเวนต์ปิดรับสมัครแล้ว"); continue
+        eid=int(e['id']); active=planned_active.setdefault(eid,event_reg_count(eid)); wait=planned_wait.setdefault(eid,event_reg_count(eid,True)-active)
+        has_limit=bool(e['has_limit'] and int(e['max_slots'] or 0)>0)
+        if not has_limit or active<int(e['max_slots'] or 0):
+            record['is_waitlist']=0; planned_active[eid]+=1; accepted.append(record); continue
+        can_wait=bool(e['waitlist_enabled'] and (int(e['waitlist_limit'] or 0)<=0 or wait<int(e['waitlist_limit'] or 0)))
+        if can_wait:
+            record['is_waitlist']=1; planned_wait[eid]+=1; accepted.append(record)
+        else:
+            errors.append(f"แถว {record['rowno']}: {record['event_name']} เต็มแล้ว")
+    return accepted,errors
+
+
+@app.route('/tournament/<int:tournament_id>/bulk-registration-template')
+def public_bulk_registration_template(tournament_id):
+    tournament,events=_public_tournament_and_events(tournament_id)
+    if not tournament: abort(404)
+    if not tournament['is_open'] or not events:
+        flash('งานนี้ยังไม่มีอีเวนต์ที่เปิดรับสมัคร'); return redirect(url_for('home'))
+    return excel_response(build_bulk_registration_workbook(events),f'tournament_{tournament_id}_public_bulk_registration_template.xlsx')
+
+
+@app.route('/tournament/<int:tournament_id>/bulk-register',methods=['GET','POST'])
+def public_bulk_register(tournament_id):
+    tournament,events=_public_tournament_and_events(tournament_id)
+    if not tournament: abort(404)
+    if not tournament['is_open']:
+        flash('งานแข่งขันนี้ปิดรับสมัครแล้ว'); return redirect(url_for('home'))
+    if not events:
+        flash('ยังไม่มีอีเวนต์ที่เปิดรับสมัคร'); return redirect(url_for('home'))
+    if request.method=='POST':
+        action=request.form.get('action','preview')
+        if action=='confirm':
+            token=request.form.get('token','')
+            payload=_load_public_bulk_cache(token,delete=True)
+            if not payload or int(payload.get('tournament_id',0))!=tournament_id:
+                flash('ข้อมูลพรีวิวหมดอายุ กรุณาอัปโหลด Excel ใหม่'); return redirect(request.url)
+            records=payload.get('records',[]); conn=get_db(); imported=[]; errors=[]; by_event={}
+            event_map={int(e['id']):e for e in events}
+            for record in records:
+                e=event_map.get(int(record['event_id']))
+                if not e:
+                    errors.append(f"แถว {record['rowno']}: อีเวนต์ปิดรับสมัครแล้ว"); continue
+                full,wait=registration_capacity_state(e)
+                if full and not wait:
+                    errors.append(f"แถว {record['rowno']}: {record['event_name']} เต็มแล้ว"); continue
+                code=unique_registration_code(conn)
+                rid=insert_returning_id(conn,'''INSERT INTO registrations(event_id,team_name,affiliation,contact_name,phone,notes,created_at,member_count,source,registration_code,status,is_waitlist) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',(e['id'],record['team_name'] or None,record['affiliation'] or None,record['contact_name'],record['phone'],record['notes'],now(),record['member_count'],'public_excel_all',code,'pending',1 if full and wait else 0))
+                c=conn.cursor()
+                for m in record['members']: c.execute('INSERT INTO registration_members(registration_id,member_name,member_idcard) VALUES(?,?,?)',(rid,m['name'],m['idcard']))
+                item=dict(record); item.update(registration_code=code,registration_id=rid,is_waitlist=1 if full and wait else 0)
+                imported.append(item); by_event[item['event_name']]=by_event.get(item['event_name'],0)+1
+            conn.execute('INSERT INTO import_logs(tournament_id,import_type,filename,imported_count,error_count,created_at) VALUES(?,?,?,?,?,?)',(tournament_id,'public_registrations_all_events',payload.get('filename','public_bulk.xlsx'),len(imported),len(errors),now()))
+            conn.commit(); conn.close()
+            return render_template('public_bulk_import_result.html',tournament=tournament,imported=imported,errors=errors,event_summary=sorted(by_event.items()))
+        f=request.files.get('excel_file')
+        if not f or not allowed_file(f.filename,EXCEL_EXTENSIONS):
+            flash('กรุณาเลือกไฟล์ .xlsx'); return redirect(request.url)
+        try:
+            wb=openpyxl.load_workbook(f,data_only=True)
+            ws=wb['รายชื่อสมัครรวม'] if 'รายชื่อสมัครรวม' in wb.sheetnames else wb.active
+        except Exception:
+            flash('ไม่สามารถอ่านไฟล์ Excel ได้ กรุณาใช้ไฟล์ตัวอย่างที่ดาวน์โหลดจากระบบ'); return redirect(request.url)
+        records,errors=_parse_public_bulk_sheet(events,ws,request.form.get('default_contact','').strip(),request.form.get('default_phone','').strip())
+        records,capacity_errors=_preview_capacity(records,events); errors.extend(capacity_errors)
+        token=_save_public_bulk_cache({'tournament_id':tournament_id,'filename':secure_filename(f.filename),'records':records}) if records else None
+        return render_template('public_bulk_import.html',tournament=tournament,events=events,records=records,errors=errors,token=token,default_contact=request.form.get('default_contact','').strip(),default_phone=request.form.get('default_phone','').strip())
+    return render_template('public_bulk_import.html',tournament=tournament,events=events,records=None,errors=[],token=None)
 
 @app.route('/admin/tournament/<int:tournament_id>/event-template')
 def event_template(tournament_id):
