@@ -166,9 +166,14 @@ def event_display_name(e):
     custom=(e['event_name'] or '').strip()
     return custom or f"{category_label(e['category_type'])} {gender_label(e['gender_type'])} {age_label(e['age_group'])}"
 
-def allowed_member_counts(category): return [1] if category=='single' else ([2,3] if category=='pair' else [3,4])
+def allowed_member_counts(category, gender_type=None):
+    if category=='single':
+        return [1]
+    if category=='pair':
+        return [2] if gender_type=='mixed' else [2,3]
+    return [3,4]
 
-def suggested_member_count(category): return max(allowed_member_counts(category))
+def suggested_member_count(category, gender_type=None): return max(allowed_member_counts(category, gender_type))
 
 def event_reg_count(event_id, include_waitlist=False):
     conn=get_db(); q='SELECT COUNT(*) total FROM registrations WHERE event_id=?'
@@ -250,8 +255,8 @@ def register_event(event_id):
     if request.method=='POST':
         if not event['is_open'] or not tournament['is_open']: flash('อีเวนต์นี้ปิดรับสมัครแล้ว'); return redirect(url_for('register_event',event_id=event_id))
         if full and not can_waitlist: flash('อีเวนต์นี้เต็มแล้ว'); return redirect(url_for('register_event',event_id=event_id))
-        member_count=int(request.form.get('member_count',suggested_member_count(event['category_type'])))
-        if member_count not in allowed_member_counts(event['category_type']): flash('จำนวนผู้เล่นไม่ตรงตามประเภทการแข่งขัน'); return redirect(url_for('register_event',event_id=event_id))
+        member_count=int(request.form.get('member_count',suggested_member_count(event['category_type'], event['gender_type'])))
+        if member_count not in allowed_member_counts(event['category_type'], event['gender_type']): flash('จำนวนผู้เล่นไม่ตรงตามประเภทการแข่งขัน'); return redirect(url_for('register_event',event_id=event_id))
         team_name=request.form.get('team_name','').strip(); affiliation=request.form.get('affiliation','').strip(); contact=request.form.get('contact_name','').strip(); phone=request.form.get('phone','').strip(); notes=request.form.get('notes','').strip()
         if not contact or not phone: flash('กรุณากรอกชื่อผู้ติดต่อและเบอร์โทร'); return redirect(url_for('register_event',event_id=event_id))
         if event['category_type']=='team' and not team_name: flash('ประเภททีมต้องกรอกชื่อทีม'); return redirect(url_for('register_event',event_id=event_id))
@@ -272,7 +277,7 @@ def register_event(event_id):
         rid=insert_returning_id(conn,'''INSERT INTO registrations(event_id,team_name,affiliation,contact_name,phone,slip_filename,notes,created_at,member_count,source,registration_code,status,is_waitlist) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',(event_id,team_name or None,affiliation or None,contact,phone,slip,notes,now(),member_count,'web',code,'pending',wait)); c=conn.cursor()
         for m in members: c.execute('INSERT INTO registration_members(registration_id,member_name,member_idcard,idcard_file) VALUES(?,?,?,?)',(rid,*m))
         conn.commit(); conn.close(); return redirect(url_for('registration_status',code=code))
-    return render_template('register_event.html',event=event,tournament=tournament,reg_count=reg_count,full=full,can_waitlist=can_waitlist,default_member_count=suggested_member_count(event['category_type']))
+    return render_template('register_event.html',event=event,tournament=tournament,reg_count=reg_count,full=full,can_waitlist=can_waitlist,default_member_count=suggested_member_count(event['category_type'], event['gender_type']))
 
 @app.route('/registration/<code>')
 def registration_status(code):
@@ -333,9 +338,9 @@ def manage_events(tournament_id):
 
 
 def parse_event_form():
-    category=request.form.get('category_type','single'); has_fee=1 if request.form.get('has_fee') else 0; has_limit=1 if request.form.get('has_limit') else 0
+    category=request.form.get('category_type','single'); gender=request.form.get('gender_type','open'); has_fee=1 if request.form.get('has_fee') else 0; has_limit=1 if request.form.get('has_limit') else 0
     fee=int(request.form.get('fee','0') or 0) if has_fee else 0; max_slots=int(request.form.get('max_slots','0') or 0) if has_limit else 0
-    return dict(event_name=request.form.get('event_name','').strip(),category_type=category,gender_type=request.form.get('gender_type','open'),age_group=request.form.get('age_group','general').strip(),team_size=suggested_member_count(category),has_fee=has_fee,fee=fee,fee_per=request.form.get('fee_per','team'),require_slip=1 if has_fee and request.form.get('require_slip') else 0,has_limit=has_limit,max_slots=max_slots,waitlist_enabled=1 if has_limit and request.form.get('waitlist_enabled') else 0,waitlist_limit=int(request.form.get('waitlist_limit','0') or 0),is_open=1 if request.form.get('is_open') else 0)
+    return dict(event_name=request.form.get('event_name','').strip(),category_type=category,gender_type=gender,age_group=request.form.get('age_group','general').strip(),team_size=suggested_member_count(category, gender),has_fee=has_fee,fee=fee,fee_per=request.form.get('fee_per','team'),require_slip=1 if has_fee and request.form.get('require_slip') else 0,has_limit=has_limit,max_slots=max_slots,waitlist_enabled=1 if has_limit and request.form.get('waitlist_enabled') else 0,waitlist_limit=int(request.form.get('waitlist_limit','0') or 0),is_open=1 if request.form.get('is_open') else 0)
 
 @app.route('/admin/tournament/<int:tournament_id>/event/create',methods=['GET','POST'])
 def create_event(tournament_id):
@@ -420,7 +425,7 @@ def registration_template(event_id):
     if not is_logged_in(): return redirect(url_for('login'))
     conn=get_db(); e=get_owned_event(conn,event_id); conn.close()
     if not e or e['created_by']!=session['user_id']: abort(404)
-    wb=openpyxl.Workbook(); ws=wb.active; ws.title='รายชื่อสมัคร'; headers=['ชื่อทีม','ต้นสังกัด','ผู้ติดต่อ','เบอร์โทร','จำนวนผู้เล่น','สมาชิก 1','เลขบัตร 1','สมาชิก 2','เลขบัตร 2','สมาชิก 3','เลขบัตร 3','สมาชิก 4','เลขบัตร 4','หมายเหตุ']; ws.append(headers); ws.append(['ตัวอย่างทีม A','โรงเรียน/ชมรม','นายผู้ติดต่อ','0812345678',suggested_member_count(e['category_type']),'ชื่อสมาชิก 1','','ชื่อสมาชิก 2','','ชื่อสมาชิก 3','','ชื่อสมาชิก 4','',''])
+    wb=openpyxl.Workbook(); ws=wb.active; ws.title='รายชื่อสมัคร'; headers=['ชื่อทีม','ต้นสังกัด','ผู้ติดต่อ','เบอร์โทร','จำนวนผู้เล่น','สมาชิก 1','เลขบัตร 1','สมาชิก 2','เลขบัตร 2','สมาชิก 3','เลขบัตร 3','สมาชิก 4','เลขบัตร 4','หมายเหตุ']; ws.append(headers); ws.append(['ตัวอย่างทีม A','โรงเรียน/ชมรม','นายผู้ติดต่อ','0812345678',suggested_member_count(e['category_type'], e['gender_type']),'ชื่อสมาชิก 1','','ชื่อสมาชิก 2','','ชื่อสมาชิก 3','','ชื่อสมาชิก 4','',''])
     style_ws(ws); return excel_response(wb,f'event_{event_id}_registration_template.xlsx')
 
 @app.route('/admin/event/<int:event_id>/import',methods=['GET','POST'])
@@ -438,7 +443,7 @@ def import_registrations(event_id):
             vals=list(row)+['']*14; team,aff,contact,phone,count= [str(vals[i] or '').strip() for i in range(5)]
             try: count=int(float(count))
             except: errors.append(f'แถว {rowno}: จำนวนผู้เล่นไม่ถูกต้อง'); continue
-            if count not in allowed_member_counts(e['category_type']): errors.append(f'แถว {rowno}: จำนวนผู้เล่นไม่ตรงประเภท {category_label(e["category_type"])}'); continue
+            if count not in allowed_member_counts(e['category_type'], e['gender_type']): errors.append(f'แถว {rowno}: จำนวนผู้เล่นไม่ตรงประเภท {category_label(e["category_type"])}'); continue
             members=[]
             for i in range(4):
                 name=str(vals[5+i*2] or '').strip(); idc=str(vals[6+i*2] or '').strip()
@@ -468,20 +473,20 @@ def bulk_registration_template(tournament_id):
     ws.append(headers)
     # ใส่แถวว่างอย่างน้อยหนึ่งแถวต่ออีเวนต์ ผู้ใช้สามารถคัดลอกแถวเดิมเพิ่มได้
     for e in events:
-        ws.append([e['id'],event_display_name(e),'','','','',suggested_member_count(e['category_type']),'','','','','','','','',''])
+        ws.append([e['id'],event_display_name(e),'','','','',suggested_member_count(e['category_type'], e['gender_type']),'','','','','','','','',''])
     # เตรียมแถวว่างเพิ่มเติมสำหรับกรอกหลายทีม
     for _ in range(max(50, len(events)*3)):
         ws.append(['','','','','','','','','','','','','','','',''])
     ref=wb.create_sheet('รายการอีเวนต์')
     ref.append(['รหัสอีเวนต์','ชื่ออีเวนต์','ประเภท','เพศ','รุ่น','จำนวนผู้เล่นที่รับได้'])
     for e in events:
-        ref.append([e['id'],event_display_name(e),category_label(e['category_type']),gender_label(e['gender_type']),age_label(e['age_group']),','.join(str(n) for n in allowed_member_counts(e['category_type']))])
+        ref.append([e['id'],event_display_name(e),category_label(e['category_type']),gender_label(e['gender_type']),age_label(e['age_group']),','.join(str(n) for n in allowed_member_counts(e['category_type'], e['gender_type']))])
     guide=wb.create_sheet('วิธีใช้')
     guide.append(['วิธีกรอกรายชื่อสมัครรวมทุกอีเวนต์'])
     guide.append(['1. กรอกข้อมูลในชีต “รายชื่อสมัครรวม” เพียงชีตเดียว'])
     guide.append(['2. ใช้รหัสอีเวนต์ตามชีต “รายการอีเวนต์” ระบบจะแยกผู้สมัครให้อัตโนมัติ'])
     guide.append(['3. หากมีหลายทีมในอีเวนต์เดียว ให้คัดลอกแถวของอีเวนต์นั้นเพิ่ม'])
-    guide.append(['4. เดี่ยวรับ 1 คน, คู่รับ 2 หรือ 3 คน, ทีมรับ 3 หรือ 4 คน'])
+    guide.append(['4. เดี่ยวรับ 1 คน, คู่ชาย/คู่หญิงรับ 2 หรือ 3 คน, คู่ผสมรับเฉพาะ 2 คน, ทีมรับ 3 หรือ 4 คน'])
     guide.append(['5. ชื่อทีมบังคับเฉพาะประเภททีม แต่กรอกได้ทุกประเภท'])
     guide.append(['6. ห้ามแก้ชื่อหัวตาราง และใช้ไฟล์ .xlsx เท่านั้น'])
     style_ws(ws); style_ws(ref)
@@ -541,8 +546,8 @@ def import_registrations_all(tournament_id):
             team=str(vals[2] or '').strip(); aff=str(vals[3] or '').strip(); contact=str(vals[4] or '').strip(); phone=str(vals[5] or '').strip(); count=_int_from_excel(vals[6])
             if count is None:
                 errors.append(f'แถว {rowno}: จำนวนผู้เล่นไม่ถูกต้อง'); continue
-            if count not in allowed_member_counts(e['category_type']):
-                allowed='/'.join(str(n) for n in allowed_member_counts(e['category_type']))
+            if count not in allowed_member_counts(e['category_type'], e['gender_type']):
+                allowed='/'.join(str(n) for n in allowed_member_counts(e['category_type'], e['gender_type']))
                 errors.append(f'แถว {rowno}: {event_display_name(e)} รับผู้เล่น {allowed} คน'); continue
             if e['category_type']=='team' and not team:
                 errors.append(f'แถว {rowno}: ประเภททีมต้องกรอกชื่อทีม'); continue
@@ -591,7 +596,8 @@ def import_events(tournament_id):
             hasfee=truthy(v[5]); haslimit=truthy(v[9])
             try: fee=int(v[6] or 0); limit=int(v[10] or 0); waitlimit=int(v[12] or 0)
             except: errors.append(f'แถว {rowno}: จำนวนเงินหรือจำนวนรับสมัครไม่ถูกต้อง'); continue
-            conn.execute('''INSERT INTO events(tournament_id,event_name,category_type,gender_type,age_group,max_slots,fee,team_size,is_open,created_at,has_fee,fee_per,require_slip,has_limit,waitlist_enabled,waitlist_limit) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(tournament_id,str(v[0] or '').strip(),cat,normalize_gender(v[2]),normalize_age(v[3]),limit if haslimit else 0,fee if hasfee else 0,suggested_member_count(cat),1 if truthy(v[4]) else 0,now(),1 if hasfee else 0,'person' if str(v[7] or '').strip() in {'คน','person'} else 'team',1 if truthy(v[8]) else 0,1 if haslimit else 0,1 if truthy(v[11]) else 0,waitlimit)); imported+=1
+            gender=normalize_gender(v[2])
+            conn.execute('''INSERT INTO events(tournament_id,event_name,category_type,gender_type,age_group,max_slots,fee,team_size,is_open,created_at,has_fee,fee_per,require_slip,has_limit,waitlist_enabled,waitlist_limit) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(tournament_id,str(v[0] or '').strip(),cat,gender,normalize_age(v[3]),limit if haslimit else 0,fee if hasfee else 0,suggested_member_count(cat,gender),1 if truthy(v[4]) else 0,now(),1 if hasfee else 0,'person' if str(v[7] or '').strip() in {'คน','person'} else 'team',1 if truthy(v[8]) else 0,1 if haslimit else 0,1 if truthy(v[11]) else 0,waitlimit)); imported+=1
         conn.execute('INSERT INTO import_logs(tournament_id,import_type,filename,imported_count,error_count,created_at) VALUES(?,?,?,?,?,?)',(tournament_id,'events',secure_filename(f.filename),imported,len(errors),now())); conn.commit(); conn.close(); return render_template('import_result.html',title='ผลนำเข้าอีเวนต์',imported=imported,errors=errors,back_url=url_for('manage_events',tournament_id=tournament_id))
     conn.close(); return render_template('import_excel.html',title='นำเข้าอีเวนต์จาก Excel',description=f'งานแข่งขัน: {t["title"]}',template_url=url_for('event_template',tournament_id=tournament_id))
 
