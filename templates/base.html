@@ -4,7 +4,17 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}ระบบรับสมัครการแข่งขัน{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='saas2') }}">
+    <script>
+    (function(){
+        try {
+            var saved = localStorage.getItem('sport-register-font-scale');
+            var scale = saved ? Number(saved) : 1;
+            if (![0.85, 1, 1.15, 1.3].includes(scale)) scale = 1;
+            document.documentElement.style.setProperty('--user-font-scale', String(scale));
+        } catch (e) {}
+    })();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='saas-font-size-1') }}">
 </head>
 <body class="{% if session.get('user_id') %}admin-body{% else %}public-body{% endif %}">
 {% if session.get('user_id') %}
@@ -34,13 +44,26 @@
             <header class="topbar">
                 <button class="menu-toggle" type="button" onclick="toggleSidebar()" aria-label="เปิดเมนู">☰</button>
                 <div class="topbar-title"><strong>{% block topbar_title %}ระบบรับสมัครการแข่งขัน{% endblock %}</strong><span>จัดการข้อมูลได้ง่ายในที่เดียว</span></div>
-                <div class="topbar-actions"><a class="icon-btn" href="{{ url_for('home') }}" target="_blank" title="เปิดหน้ารับสมัคร">↗</a><div class="avatar top-avatar">{{ (session.get('username') or 'A')[0]|upper }}</div></div>
+                <div class="topbar-actions">
+                    <div class="font-size-toolbar" role="group" aria-label="ปรับขนาดตัวหนังสือ">
+                        <button class="font-size-btn font-size-icon-small" type="button" onclick="adjustFontScale(-1)" title="ลดขนาดตัวหนังสือ" aria-label="ลดขนาดตัวหนังสือ">A−</button>
+                        <button class="font-size-btn font-size-icon-normal" type="button" data-font-reset="true" onclick="setFontScale(1)" title="คืนค่าขนาดตัวหนังสือปกติ" aria-label="คืนค่าขนาดตัวหนังสือปกติ">A</button>
+                        <button class="font-size-btn font-size-icon-large" type="button" onclick="adjustFontScale(1)" title="เพิ่มขนาดตัวหนังสือ" aria-label="เพิ่มขนาดตัวหนังสือ">A+</button>
+                    </div>
+                    <a class="icon-btn" href="{{ url_for('home') }}" target="_blank" title="เปิดหน้ารับสมัคร">↗</a><div class="avatar top-avatar">{{ (session.get('username') or 'A')[0]|upper }}</div></div>
             </header>
             <main class="content-area">
 {% else %}
     <header class="public-header">
         <a class="public-brand" href="{{ url_for('home') }}"><span class="brand-mark">🏆</span><span><strong>Sport Register</strong><small>ระบบรับสมัครการแข่งขัน</small></span></a>
-        <nav class="public-nav"><a href="{{ url_for('home') }}">หน้าหลัก</a><a class="btn btn-soft" href="{{ url_for('login') }}">เข้าสู่ระบบแอดมิน</a></nav>
+        <div class="public-header-tools">
+            <div class="font-size-toolbar" role="group" aria-label="ปรับขนาดตัวหนังสือ">
+                <button class="font-size-btn font-size-icon-small" type="button" onclick="adjustFontScale(-1)" title="ลดขนาดตัวหนังสือ" aria-label="ลดขนาดตัวหนังสือ">A−</button>
+                <button class="font-size-btn font-size-icon-normal" type="button" data-font-reset="true" onclick="setFontScale(1)" title="คืนค่าขนาดตัวหนังสือปกติ" aria-label="คืนค่าขนาดตัวหนังสือปกติ">A</button>
+                <button class="font-size-btn font-size-icon-large" type="button" onclick="adjustFontScale(1)" title="เพิ่มขนาดตัวหนังสือ" aria-label="เพิ่มขนาดตัวหนังสือ">A+</button>
+            </div>
+            <nav class="public-nav"><a href="{{ url_for('home') }}">หน้าหลัก</a><a class="btn btn-soft" href="{{ url_for('login') }}">เข้าสู่ระบบแอดมิน</a></nav>
+        </div>
     </header>
     <main class="public-container">
 {% endif %}
@@ -56,6 +79,30 @@
     </main>
 {% endif %}
 <script>
+function getFontScale(){
+    var saved=1;
+    try{saved=Number(localStorage.getItem('sport-register-font-scale') || 1)}catch(e){}
+    return [0.85,1,1.15,1.3].includes(saved) ? saved : 1;
+}
+function setFontScale(scale){
+    var allowed=[0.85,1,1.15,1.3];
+    scale=Number(scale);
+    if(!allowed.includes(scale)) scale=1;
+    document.documentElement.style.setProperty('--user-font-scale', String(scale));
+    try{localStorage.setItem('sport-register-font-scale', String(scale))}catch(e){}
+    document.querySelectorAll('[data-font-reset]').forEach(function(btn){
+        btn.classList.toggle('active', scale===1);
+    });
+}
+function adjustFontScale(direction){
+    var allowed=[0.85,1,1.15,1.3];
+    var current=getFontScale();
+    var index=allowed.indexOf(current);
+    var next=Math.max(0, Math.min(allowed.length-1, index + Number(direction)));
+    setFontScale(allowed[next]);
+}
+function syncFontScaleButtons(){setFontScale(getFontScale());}
+document.addEventListener('DOMContentLoaded', syncFontScaleButtons);
 function toggleSidebar(){document.getElementById('sidebar')?.classList.toggle('open')}
 document.addEventListener('click', function(e){const s=document.getElementById('sidebar');if(!s)return;if(window.innerWidth<=900 && s.classList.contains('open') && !s.contains(e.target) && !e.target.classList.contains('menu-toggle')) s.classList.remove('open')})
 </script>

@@ -7,6 +7,7 @@ from werkzeug.utils import secure_filename
 import openpyxl
 import qrcode
 from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.worksheet.datavalidation import DataValidation
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_NAME = os.environ.get('SQLITE_DB_PATH', os.path.join(BASE_DIR, 'tournament_events.db'))
@@ -450,6 +451,121 @@ def import_registrations(event_id):
             imported+=1
         conn.execute('INSERT INTO import_logs(tournament_id,event_id,import_type,filename,imported_count,error_count,created_at) VALUES(?,?,?,?,?,?,?)',(e['tournament_id'],event_id,'registrations',secure_filename(f.filename),imported,len(errors),now())); conn.commit(); conn.close(); return render_template('import_result.html',title='ผลนำเข้ารายชื่อ',imported=imported,errors=errors,back_url=url_for('manage_events',tournament_id=e['tournament_id']))
     conn.close(); return render_template('import_excel.html',title='นำเข้าทีมหรือนักกีฬา',description=f'อีเวนต์: {event_display_name(e)}',template_url=url_for('registration_template',event_id=event_id))
+
+
+@app.route('/admin/tournament/<int:tournament_id>/registration-template-all')
+def bulk_registration_template(tournament_id):
+    """ดาวน์โหลด Excel ไฟล์เดียวสำหรับกรอกรายชื่อผู้สมัครทุกอีเวนต์ในงาน"""
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); t=get_owned_tournament(conn,tournament_id)
+    if not t: conn.close(); abort(404)
+    events=conn.execute('SELECT * FROM events WHERE tournament_id=? ORDER BY age_group,category_type,gender_type,id',(tournament_id,)).fetchall(); conn.close()
+    if not events:
+        flash('กรุณาสร้างอีเวนต์ก่อนดาวน์โหลดไฟล์ตัวอย่างรายชื่อรวม')
+        return redirect(url_for('manage_events',tournament_id=tournament_id))
+    wb=openpyxl.Workbook(); ws=wb.active; ws.title='รายชื่อสมัครรวม'
+    headers=['รหัสอีเวนต์','ชื่ออีเวนต์','ชื่อทีม','ต้นสังกัด','ผู้ติดต่อ','เบอร์โทร','จำนวนผู้เล่น','สมาชิก 1','เลขบัตร 1','สมาชิก 2','เลขบัตร 2','สมาชิก 3','เลขบัตร 3','สมาชิก 4','เลขบัตร 4','หมายเหตุ']
+    ws.append(headers)
+    # ใส่แถวว่างอย่างน้อยหนึ่งแถวต่ออีเวนต์ ผู้ใช้สามารถคัดลอกแถวเดิมเพิ่มได้
+    for e in events:
+        ws.append([e['id'],event_display_name(e),'','','','',suggested_member_count(e['category_type']),'','','','','','','','',''])
+    # เตรียมแถวว่างเพิ่มเติมสำหรับกรอกหลายทีม
+    for _ in range(max(50, len(events)*3)):
+        ws.append(['','','','','','','','','','','','','','','',''])
+    ref=wb.create_sheet('รายการอีเวนต์')
+    ref.append(['รหัสอีเวนต์','ชื่ออีเวนต์','ประเภท','เพศ','รุ่น','จำนวนผู้เล่นที่รับได้'])
+    for e in events:
+        ref.append([e['id'],event_display_name(e),category_label(e['category_type']),gender_label(e['gender_type']),age_label(e['age_group']),','.join(str(n) for n in allowed_member_counts(e['category_type']))])
+    guide=wb.create_sheet('วิธีใช้')
+    guide.append(['วิธีกรอกรายชื่อสมัครรวมทุกอีเวนต์'])
+    guide.append(['1. กรอกข้อมูลในชีต “รายชื่อสมัครรวม” เพียงชีตเดียว'])
+    guide.append(['2. ใช้รหัสอีเวนต์ตามชีต “รายการอีเวนต์” ระบบจะแยกผู้สมัครให้อัตโนมัติ'])
+    guide.append(['3. หากมีหลายทีมในอีเวนต์เดียว ให้คัดลอกแถวของอีเวนต์นั้นเพิ่ม'])
+    guide.append(['4. เดี่ยวรับ 1 คน, คู่รับ 2 หรือ 3 คน, ทีมรับ 3 หรือ 4 คน'])
+    guide.append(['5. ชื่อทีมบังคับเฉพาะประเภททีม แต่กรอกได้ทุกประเภท'])
+    guide.append(['6. ห้ามแก้ชื่อหัวตาราง และใช้ไฟล์ .xlsx เท่านั้น'])
+    style_ws(ws); style_ws(ref)
+    guide.column_dimensions['A'].width=110
+    ws.freeze_panes='A2'; ws.auto_filter.ref=ws.dimensions
+    return excel_response(wb,f'tournament_{tournament_id}_all_registration_template.xlsx')
+
+
+def _event_lookup_for_bulk_import(events):
+    by_id={int(e['id']):e for e in events}
+    by_name={}
+    for e in events:
+        name=event_display_name(e).strip()
+        by_name.setdefault(name,[]).append(e)
+    return by_id,by_name
+
+
+def _int_from_excel(value, default=None):
+    if value in (None,''): return default
+    try: return int(float(value))
+    except (TypeError,ValueError): return default
+
+
+@app.route('/admin/tournament/<int:tournament_id>/registration-import-all',methods=['GET','POST'])
+def import_registrations_all(tournament_id):
+    """Import รายชื่อจาก Excel ไฟล์เดียว แล้วแยกผู้สมัครเข้าทุกอีเวนต์อัตโนมัติ"""
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); t=get_owned_tournament(conn,tournament_id)
+    if not t: conn.close(); abort(404)
+    events=conn.execute('SELECT * FROM events WHERE tournament_id=? ORDER BY id',(tournament_id,)).fetchall()
+    if not events:
+        conn.close(); flash('กรุณาสร้างอีเวนต์ก่อนนำเข้ารายชื่อรวม'); return redirect(url_for('manage_events',tournament_id=tournament_id))
+    errors=[]; imported=0; imported_by_event={}
+    if request.method=='POST':
+        f=request.files.get('excel_file')
+        if not f or not allowed_file(f.filename,EXCEL_EXTENSIONS):
+            conn.close(); flash('กรุณาเลือกไฟล์ .xlsx'); return redirect(request.url)
+        try:
+            wb=openpyxl.load_workbook(f,data_only=True)
+            ws=wb['รายชื่อสมัครรวม'] if 'รายชื่อสมัครรวม' in wb.sheetnames else wb.active
+        except Exception:
+            conn.close(); flash('ไม่สามารถอ่านไฟล์ Excel ได้ กรุณาใช้ไฟล์ .xlsx ที่ดาวน์โหลดจากระบบ'); return redirect(request.url)
+        by_id,by_name=_event_lookup_for_bulk_import(events)
+        for rowno,row in enumerate(ws.iter_rows(min_row=2,values_only=True),start=2):
+            if not any(v not in (None,'') for v in row): continue
+            vals=list(row)+['']*16
+            event_id=_int_from_excel(vals[0])
+            event_name=str(vals[1] or '').strip()
+            e=by_id.get(event_id) if event_id is not None else None
+            if not e and event_name:
+                matches=by_name.get(event_name,[])
+                if len(matches)==1: e=matches[0]
+                elif len(matches)>1:
+                    errors.append(f'แถว {rowno}: ชื่ออีเวนต์ซ้ำกัน กรุณาระบุรหัสอีเวนต์'); continue
+            if not e:
+                errors.append(f'แถว {rowno}: ไม่พบอีเวนต์ กรุณาตรวจรหัสหรือชื่ออีเวนต์'); continue
+            team=str(vals[2] or '').strip(); aff=str(vals[3] or '').strip(); contact=str(vals[4] or '').strip(); phone=str(vals[5] or '').strip(); count=_int_from_excel(vals[6])
+            if count is None:
+                errors.append(f'แถว {rowno}: จำนวนผู้เล่นไม่ถูกต้อง'); continue
+            if count not in allowed_member_counts(e['category_type']):
+                allowed='/'.join(str(n) for n in allowed_member_counts(e['category_type']))
+                errors.append(f'แถว {rowno}: {event_display_name(e)} รับผู้เล่น {allowed} คน'); continue
+            if e['category_type']=='team' and not team:
+                errors.append(f'แถว {rowno}: ประเภททีมต้องกรอกชื่อทีม'); continue
+            members=[]
+            for i in range(4):
+                name=str(vals[7+i*2] or '').strip(); idc=str(vals[8+i*2] or '').strip()
+                if name: members.append((name,idc))
+            if len(members)!=count or not contact or not phone:
+                errors.append(f'แถว {rowno}: ข้อมูลสมาชิก ผู้ติดต่อ หรือเบอร์โทรไม่ครบ'); continue
+            full,wait=registration_capacity_state(e)
+            if full and not wait:
+                errors.append(f'แถว {rowno}: {event_display_name(e)} เต็มแล้ว'); continue
+            code=unique_registration_code(conn)
+            rid=insert_returning_id(conn,'''INSERT INTO registrations(event_id,team_name,affiliation,contact_name,phone,notes,created_at,member_count,source,registration_code,status,is_waitlist) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',(e['id'],team or None,aff or None,contact,phone,str(vals[15] or '').strip(),now(),count,'excel_all',code,'pending',1 if full and wait else 0))
+            c=conn.cursor()
+            for m in members: c.execute('INSERT INTO registration_members(registration_id,member_name,member_idcard) VALUES(?,?,?)',(rid,*m))
+            imported+=1; imported_by_event[e['id']]=imported_by_event.get(e['id'],0)+1
+        conn.execute('INSERT INTO import_logs(tournament_id,import_type,filename,imported_count,error_count,created_at) VALUES(?,?,?,?,?,?)',(tournament_id,'registrations_all_events',secure_filename(f.filename),imported,len(errors),now()))
+        conn.commit(); conn.close()
+        event_summary=[f"{event_display_name(e)}: {imported_by_event[e['id']]} รายการ" for e in events if imported_by_event.get(e['id'])]
+        return render_template('import_result.html',title='ผลนำเข้ารายชื่อรวมทุกอีเวนต์',imported=imported,errors=errors,event_summary=event_summary,back_url=url_for('manage_events',tournament_id=tournament_id))
+    conn.close()
+    return render_template('import_excel.html',title='นำเข้ารายชื่อรวมทุกอีเวนต์',description=f'งานแข่งขัน: {t["title"]} — ใช้ Excel ไฟล์เดียว ระบบจะแยกรายชื่อเข้าทุกอีเวนต์ให้อัตโนมัติ',template_url=url_for('bulk_registration_template',tournament_id=tournament_id))
 
 @app.route('/admin/tournament/<int:tournament_id>/event-template')
 def event_template(tournament_id):
