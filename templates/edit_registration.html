@@ -1,0 +1,20 @@
+{% extends 'base.html' %}{% block title %}แก้ไขผู้สมัคร{% endblock %}{% block content %}
+<div class="page-head"><div><h1>แก้ไขข้อมูลผู้สมัคร</h1><p class="muted">รหัสสมัคร <span class="code">{{ reg['registration_code'] }}</span> · สามารถเติมรายชื่อนักกีฬาที่ยังไม่ครบภายหลังได้</p></div><a class="btn btn-secondary" href="{{ url_for('tournament_registrations',tournament_id=reg['tournament_id'],event_id=reg['event_id']) }}">← กลับหน้ารายชื่อ</a></div>
+<div class="card form-card-wide"><form method="post" enctype="multipart/form-data">
+<label>อีเวนต์</label><select name="event_id" id="event_id" onchange="syncMemberCounts()">{% for e in events %}<option value="{{ e['id'] }}" data-counts="{{ allowed_member_counts(e['category_type'],e['gender_type'])|join(',') }}" {% if e['id']==reg['event_id'] %}selected{% endif %}>{{ event_display_name(e) }}</option>{% endfor %}</select>
+<div class="grid two-col"><div><label>ชื่อทีม</label><input name="team_name" value="{{ reg['team_name'] or '' }}" placeholder="กรอกชื่อทีม หรือเว้นว่างได้สำหรับเดี่ยว/คู่"></div><div><label>ต้นสังกัด / โรงเรียน / ชมรม</label><input name="affiliation" value="{{ reg['affiliation'] or '' }}"></div></div>
+<div class="grid two-col"><div><label>ชื่อผู้ติดต่อ</label><input name="contact_name" value="{{ reg['contact_name'] }}" required></div><div><label>เบอร์โทร</label><input name="phone" value="{{ reg['phone'] }}" required></div></div>
+<div class="grid two-col"><div><label>จำนวนผู้เล่นที่ส่งสมัคร</label><select name="member_count" id="member_count" onchange="renderMemberSlots()"></select></div><div><label>สถานะ</label><select name="status"><option value="pending" {% if reg['status']!='approved' %}selected{% endif %}>รอตรวจสอบ</option><option value="approved" {% if reg['status']=='approved' %}selected{% endif %}>อนุมัติแล้ว</option></select><label class="inline-check"><input type="checkbox" name="is_waitlist" {% if reg['is_waitlist'] %}checked{% endif %}> Waiting List</label></div></div>
+<div class="flash warning-flash">สำหรับรายการคู่และทีม สามารถเว้นชื่อนักกีฬาบางคนไว้ก่อนได้ ระบบจะติดสถานะ “รายชื่อนักกีฬายังไม่ครบ” และยังไม่อนุญาตให้ออกเกียรติบัตรจนกว่าจะเติมครบ</div>
+<div id="memberSlots">
+{% for slot in member_slots %}<div class="member-edit-slot" data-slot="{{ loop.index }}"><hr><h3>นักกีฬาคนที่ {{ loop.index }}</h3><input type="hidden" name="old_member_id_{{ loop.index }}" value="{{ slot['id'] if slot else '' }}"><div class="grid two-col"><div><label>ชื่อ-สกุล</label><input name="member_name_{{ loop.index }}" value="{{ slot['member_name'] if slot else '' }}" placeholder="เว้นว่างไว้ก่อนได้สำหรับคู่และทีม"></div><div><label>เลขบัตรประชาชน</label><input name="member_idcard_{{ loop.index }}" value="{{ slot['member_idcard'] if slot else '' }}"></div></div><label>อัปโหลดบัตรประชาชน {% if slot and slot['idcard_file'] %}<span class="muted">มีไฟล์เดิมแล้ว หากไม่เปลี่ยนให้เว้นว่าง</span>{% endif %}</label><input type="file" name="idcard_file_{{ loop.index }}" accept=".jpg,.jpeg,.png,.webp,.pdf"></div>{% endfor %}
+</div>
+<label>หมายเหตุ</label><textarea name="notes" rows="3">{{ reg['notes'] or '' }}</textarea><button class="btn btn-success">บันทึกการแก้ไข</button>
+</form></div>
+<script>
+const currentCount={{ reg['member_count'] or 1 }};
+function syncMemberCounts(){const option=document.querySelector('#event_id option:checked');const counts=(option.dataset.counts||'1').split(',').map(Number);const select=document.getElementById('member_count');const old=parseInt(select.value||currentCount);select.innerHTML=counts.map(n=>`<option value="${n}">${n} คน</option>`).join('');select.value=counts.includes(old)?old:counts[counts.length-1];renderMemberSlots()}
+function renderMemberSlots(){const count=parseInt(document.getElementById('member_count').value||1);document.querySelectorAll('.member-edit-slot').forEach(el=>el.classList.toggle('hidden',parseInt(el.dataset.slot)>count))}
+syncMemberCounts();
+</script>
+{% endblock %}

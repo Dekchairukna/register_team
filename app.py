@@ -124,11 +124,12 @@ def init_db():
         ('has_limit','INTEGER NOT NULL DEFAULT 1'),('waitlist_enabled','INTEGER NOT NULL DEFAULT 0'),('waitlist_limit','INTEGER NOT NULL DEFAULT 0')]: ensure_column(c,'events',name,ddl)
     for name, ddl in [
         ('affiliation','TEXT'),('member_count','INTEGER NOT NULL DEFAULT 1'),('source','TEXT NOT NULL DEFAULT \'web\''),
-        ('registration_code','TEXT'),('status','TEXT NOT NULL DEFAULT \'pending\''),('is_waitlist','INTEGER NOT NULL DEFAULT 0'),('approved_at','TEXT'),('award_result',"TEXT NOT NULL DEFAULT 'participant'"),('award_custom','TEXT'),('award_updated_at','TEXT')]: ensure_column(c,'registrations',name,ddl)
+        ('registration_code','TEXT'),('status','TEXT NOT NULL DEFAULT \'pending\''),('is_waitlist','INTEGER NOT NULL DEFAULT 0'),('approved_at','TEXT'),('award_result',"TEXT NOT NULL DEFAULT 'participant'"),('award_custom','TEXT'),('award_updated_at','TEXT'),('is_complete','INTEGER NOT NULL DEFAULT 1')]: ensure_column(c,'registrations',name,ddl)
     c.execute("UPDATE events SET has_fee = CASE WHEN fee > 0 THEN 1 ELSE has_fee END")
     c.execute("UPDATE events SET has_limit = CASE WHEN max_slots > 0 THEN 1 ELSE 0 END")
     c.execute("UPDATE registrations SET registration_code = 'REG-' || LPAD(CAST(id AS TEXT), 6, '0') WHERE registration_code IS NULL OR registration_code = ''" if IS_POSTGRES else "UPDATE registrations SET registration_code = 'REG-' || printf('%06d', id) WHERE registration_code IS NULL OR registration_code = ''")
     c.execute("UPDATE registrations SET member_count = (SELECT COUNT(*) FROM registration_members m WHERE m.registration_id = registrations.id) WHERE member_count IS NULL OR member_count < 1")
+    c.execute("UPDATE registrations SET is_complete = CASE WHEN (SELECT COUNT(*) FROM registration_members m WHERE m.registration_id = registrations.id) >= member_count THEN 1 ELSE 0 END")
     c.execute('CREATE INDEX IF NOT EXISTS idx_events_tournament_id ON events(tournament_id)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_registrations_event_id ON registrations(event_id)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_registration_members_registration_id ON registration_members(registration_id)')
@@ -176,6 +177,20 @@ def allowed_member_counts(category, gender_type=None):
     return [3,4]
 
 def suggested_member_count(category, gender_type=None): return max(allowed_member_counts(category, gender_type))
+
+def registration_is_complete(member_count, members):
+    try: expected=int(member_count or 0)
+    except (TypeError,ValueError): expected=0
+    named=[]
+    for m in members:
+        name=m.get('name') if isinstance(m,dict) else m[0]
+        if str(name or '').strip(): named.append(name)
+    return 1 if expected > 0 and len(named) >= expected else 0
+
+def incomplete_import_allowed(event, team_name, members):
+    # เดี่ยวต้องมีชื่อนักกีฬาเสมอ ส่วนคู่/ทีมสามารถส่งรายชื่อมาไม่ครบแล้วแก้ภายหลังได้
+    if event['category_type']=='single': return len(members)==1
+    return bool(team_name or members)
 
 def event_reg_count(event_id, include_waitlist=False):
     conn=get_db(); q='SELECT COUNT(*) total FROM registrations WHERE event_id=?'
@@ -262,7 +277,7 @@ def public_tournament_registrations(tournament_id):
     if selected_event_id:
         selected_event=next((e for e in events if e['id']==selected_event_id),None)
         if not selected_event: selected_event_id=None
-    query='SELECT r.id,r.event_id,r.team_name,r.affiliation,r.member_count,r.is_waitlist,r.created_at,e.event_name,e.category_type,e.gender_type,e.age_group FROM registrations r JOIN events e ON r.event_id=e.id WHERE e.tournament_id=?'
+    query='SELECT r.id,r.event_id,r.team_name,r.affiliation,r.member_count,r.is_complete,r.is_waitlist,r.created_at,e.event_name,e.category_type,e.gender_type,e.age_group FROM registrations r JOIN events e ON r.event_id=e.id WHERE e.tournament_id=?'
     args=[tournament_id]
     if selected_event_id:
         query += ' AND e.id=?'; args.append(selected_event_id)
@@ -312,7 +327,7 @@ def registration_status(code):
     conn=get_db(); reg=conn.execute('''SELECT r.*,e.event_name,e.category_type,e.gender_type,e.age_group,e.has_fee,e.fee,e.fee_per,t.title tournament_title,t.certificates_enabled,t.certificate_self_download,t.certificate_require_approval FROM registrations r JOIN events e ON r.event_id=e.id JOIN tournaments t ON e.tournament_id=t.id WHERE r.registration_code=?''',(code,)).fetchone()
     if not reg: conn.close(); abort(404)
     members=conn.execute('SELECT * FROM registration_members WHERE registration_id=? ORDER BY id',(reg['id'],)).fetchall(); conn.close()
-    cert_ready=bool(reg['certificates_enabled'] and reg['certificate_self_download'] and (not reg['certificate_require_approval'] or reg['status']=='approved'))
+    cert_ready=bool(reg['is_complete'] and reg['certificates_enabled'] and reg['certificate_self_download'] and (not reg['certificate_require_approval'] or reg['status']=='approved'))
     return render_template('registration_status.html',reg=reg,members=members,cert_ready=cert_ready)
 
 @app.route('/login',methods=['GET','POST'])
@@ -431,7 +446,70 @@ def approve_registration(registration_id):
     if not is_logged_in(): return redirect(url_for('login'))
     conn=get_db(); r=conn.execute('''SELECT r.*,e.tournament_id,t.created_by FROM registrations r JOIN events e ON r.event_id=e.id JOIN tournaments t ON e.tournament_id=t.id WHERE r.id=?''',(registration_id,)).fetchone()
     if not r or r['created_by']!=session['user_id']: conn.close(); return redirect(url_for('admin_dashboard'))
+    if r['status']!='approved' and not r['is_complete']:
+        conn.close(); flash('ยังอนุมัติไม่ได้ เพราะรายชื่อนักกีฬายังไม่ครบ กรุณากดแก้ไขข้อมูลก่อน')
+        return redirect(url_for('tournament_registrations',tournament_id=r['tournament_id'],event_id=r['event_id']))
     new='pending' if r['status']=='approved' else 'approved'; conn.execute('UPDATE registrations SET status=?,approved_at=? WHERE id=?',(new,now() if new=='approved' else None,registration_id)); conn.commit(); conn.close(); flash('อัปเดตสถานะเรียบร้อยแล้ว'); return redirect(url_for('tournament_registrations',tournament_id=r['tournament_id'],event_id=r['event_id']))
+
+@app.route('/admin/registration/<int:registration_id>/edit',methods=['GET','POST'])
+def edit_registration(registration_id):
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db()
+    reg=conn.execute('''SELECT r.*,e.tournament_id,t.created_by FROM registrations r JOIN events e ON r.event_id=e.id JOIN tournaments t ON e.tournament_id=t.id WHERE r.id=?''',(registration_id,)).fetchone()
+    if not reg or reg['created_by']!=session['user_id']:
+        conn.close(); return redirect(url_for('admin_dashboard'))
+    events=conn.execute('SELECT * FROM events WHERE tournament_id=? ORDER BY age_group,category_type,gender_type,id',(reg['tournament_id'],)).fetchall()
+    members=conn.execute('SELECT * FROM registration_members WHERE registration_id=? ORDER BY id',(registration_id,)).fetchall()
+    if request.method=='POST':
+        event_id=request.form.get('event_id',type=int)
+        event=next((e for e in events if e['id']==event_id),None)
+        if not event:
+            conn.close(); flash('ไม่พบอีเวนต์ที่เลือก'); return redirect(request.url)
+        try: member_count=int(request.form.get('member_count','0'))
+        except ValueError: member_count=0
+        if member_count not in allowed_member_counts(event['category_type'],event['gender_type']):
+            conn.close(); flash('จำนวนผู้เล่นไม่ตรงตามประเภทการแข่งขัน'); return redirect(request.url)
+        team_name=request.form.get('team_name','').strip(); affiliation=request.form.get('affiliation','').strip()
+        contact=request.form.get('contact_name','').strip(); phone=request.form.get('phone','').strip(); notes=request.form.get('notes','').strip()
+        if event['category_type']=='team' and not team_name:
+            conn.close(); flash('ประเภททีมต้องกรอกชื่อทีม'); return redirect(request.url)
+        if not contact or not phone:
+            conn.close(); flash('กรุณากรอกชื่อผู้ติดต่อและเบอร์โทร'); return redirect(request.url)
+        old_files={m['id']:m['idcard_file'] for m in members if m['idcard_file']}
+        kept_files=set(); updated_members=[]
+        for i in range(1,member_count+1):
+            name=request.form.get(f'member_name_{i}','').strip(); idcard=request.form.get(f'member_idcard_{i}','').strip()
+            old_member_id=request.form.get(f'old_member_id_{i}',type=int)
+            old_file=old_files.get(old_member_id)
+            uploaded=request.files.get(f'idcard_file_{i}')
+            file_name=old_file
+            if uploaded and uploaded.filename:
+                file_name=save_uploaded_file(uploaded,'idcard')
+                if not file_name:
+                    conn.close(); flash('ไฟล์บัตรประชาชนต้องเป็น JPG PNG WEBP หรือ PDF'); return redirect(request.url)
+                if old_file: delete_uploaded_file(old_file)
+            if name:
+                if file_name: kept_files.add(file_name)
+                updated_members.append((name,idcard,file_name))
+        if not incomplete_import_allowed(event,team_name,updated_members):
+            conn.close(); flash('กรุณากรอกชื่อนักกีฬาอย่างน้อย 1 คน หรือระบุชื่อทีมสำหรับรายการคู่/ทีม'); return redirect(request.url)
+        for file_name in old_files.values():
+            if file_name not in kept_files: delete_uploaded_file(file_name)
+        is_complete=registration_is_complete(member_count,updated_members)
+        status=request.form.get('status','pending')
+        if status not in {'pending','approved'}: status='pending'
+        if status=='approved' and not is_complete: status='pending'
+        is_waitlist=1 if request.form.get('is_waitlist') else 0
+        conn.execute('DELETE FROM certificates WHERE registration_id=?',(registration_id,))
+        conn.execute('DELETE FROM registration_members WHERE registration_id=?',(registration_id,))
+        conn.execute('''UPDATE registrations SET event_id=?,team_name=?,affiliation=?,contact_name=?,phone=?,notes=?,member_count=?,status=?,approved_at=?,is_waitlist=?,is_complete=? WHERE id=?''',(event_id,team_name or None,affiliation or None,contact,phone,notes,member_count,status,now() if status=='approved' else None,is_waitlist,is_complete,registration_id))
+        for m in updated_members: conn.execute('INSERT INTO registration_members(registration_id,member_name,member_idcard,idcard_file) VALUES(?,?,?,?)',(registration_id,*m))
+        conn.commit(); conn.close(); flash('แก้ไขข้อมูลผู้สมัครเรียบร้อยแล้ว' + ('' if is_complete else ' — รายชื่อนักกีฬายังไม่ครบ สามารถกลับมาแก้เพิ่มได้'))
+        return redirect(url_for('tournament_registrations',tournament_id=reg['tournament_id'],event_id=event_id))
+    member_slots=[]
+    for i in range(4): member_slots.append(members[i] if i<len(members) else None)
+    conn.close()
+    return render_template('edit_registration.html',reg=reg,events=events,member_slots=member_slots)
 
 @app.route('/admin/registration/<int:registration_id>/award',methods=['POST'])
 def update_registration_award(registration_id):
@@ -476,10 +554,12 @@ def import_registrations(event_id):
             for i in range(4):
                 name=str(vals[5+i*2] or '').strip(); idc=str(vals[6+i*2] or '').strip()
                 if name: members.append((name,idc))
-            if len(members)!=count or not contact or not phone: errors.append(f'แถว {rowno}: ข้อมูลสมาชิก ผู้ติดต่อ หรือเบอร์โทรไม่ครบ'); continue
+            if not contact or not phone: errors.append(f'แถว {rowno}: กรุณากรอกผู้ติดต่อและเบอร์โทร'); continue
+            if len(members)>count or not incomplete_import_allowed(e,team,members): errors.append(f'แถว {rowno}: รายชื่อนักกีฬาไม่ถูกต้อง'); continue
+            is_complete=registration_is_complete(count,members)
             full, wait=registration_capacity_state(e)
             if full and not wait: errors.append(f'แถว {rowno}: จำนวนรับสมัครเต็มแล้ว'); continue
-            code=unique_registration_code(conn); rid=insert_returning_id(conn,'''INSERT INTO registrations(event_id,team_name,affiliation,contact_name,phone,notes,created_at,member_count,source,registration_code,status,is_waitlist) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',(event_id,team or None,aff or None,contact,phone,str(vals[13] or '').strip(),now(),count,'excel',code,'pending',1 if full and wait else 0)); c=conn.cursor()
+            code=unique_registration_code(conn); rid=insert_returning_id(conn,'''INSERT INTO registrations(event_id,team_name,affiliation,contact_name,phone,notes,created_at,member_count,source,registration_code,status,is_waitlist,is_complete) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',(event_id,team or None,aff or None,contact,phone,str(vals[13] or '').strip(),now(),count,'excel',code,'pending',1 if full and wait else 0,is_complete)); c=conn.cursor()
             for m in members: c.execute('INSERT INTO registration_members(registration_id,member_name,member_idcard) VALUES(?,?,?)',(rid,*m))
             imported+=1
         conn.execute('INSERT INTO import_logs(tournament_id,event_id,import_type,filename,imported_count,error_count,created_at) VALUES(?,?,?,?,?,?,?)',(e['tournament_id'],event_id,'registrations',secure_filename(f.filename),imported,len(errors),now())); conn.commit(); conn.close(); return render_template('import_result.html',title='ผลนำเข้ารายชื่อ',imported=imported,errors=errors,back_url=url_for('manage_events',tournament_id=e['tournament_id']))
@@ -507,7 +587,8 @@ def build_bulk_registration_workbook(events):
     guide.append(['4. เดี่ยวรับ 1 คน, คู่ชาย/คู่หญิงรับ 2 หรือ 3 คน, คู่ผสมรับเฉพาะ 2 คน, ทีมรับ 3 หรือ 4 คน'])
     guide.append(['5. ชื่อทีมบังคับเฉพาะประเภททีม แต่กรอกได้ทุกประเภท'])
     guide.append(['6. ผู้ติดต่อและเบอร์โทรกรอกใน Excel หรือกรอกค่าเริ่มต้นตอนอัปโหลดก็ได้'])
-    guide.append(['7. ห้ามแก้ชื่อหัวตาราง และใช้ไฟล์ .xlsx เท่านั้น'])
+    guide.append(['7. รายการคู่และทีมสามารถเว้นชื่อนักกีฬาบางคนไว้ก่อน แล้วให้ผู้ดูแลเติมภายหลังได้'])
+    guide.append(['8. ห้ามแก้ชื่อหัวตาราง และใช้ไฟล์ .xlsx เท่านั้น'])
     style_ws(ws); style_ws(ref)
     guide.column_dimensions['A'].width=110
     ws.freeze_panes='A2'; ws.auto_filter.ref=ws.dimensions
@@ -585,13 +666,16 @@ def import_registrations_all(tournament_id):
             for i in range(4):
                 name=str(vals[7+i*2] or '').strip(); idc=str(vals[8+i*2] or '').strip()
                 if name: members.append((name,idc))
-            if len(members)!=count or not contact or not phone:
-                errors.append(f'แถว {rowno}: ข้อมูลสมาชิก ผู้ติดต่อ หรือเบอร์โทรไม่ครบ'); continue
+            if not contact or not phone:
+                errors.append(f'แถว {rowno}: กรุณากรอกผู้ติดต่อและเบอร์โทร'); continue
+            if len(members)>count or not incomplete_import_allowed(e,team,members):
+                errors.append(f'แถว {rowno}: รายชื่อนักกีฬาไม่ถูกต้อง'); continue
+            is_complete=registration_is_complete(count,members)
             full,wait=registration_capacity_state(e)
             if full and not wait:
                 errors.append(f'แถว {rowno}: {event_display_name(e)} เต็มแล้ว'); continue
             code=unique_registration_code(conn)
-            rid=insert_returning_id(conn,'''INSERT INTO registrations(event_id,team_name,affiliation,contact_name,phone,notes,created_at,member_count,source,registration_code,status,is_waitlist) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',(e['id'],team or None,aff or None,contact,phone,str(vals[15] or '').strip(),now(),count,'excel_all',code,'pending',1 if full and wait else 0))
+            rid=insert_returning_id(conn,'''INSERT INTO registrations(event_id,team_name,affiliation,contact_name,phone,notes,created_at,member_count,source,registration_code,status,is_waitlist,is_complete) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',(e['id'],team or None,aff or None,contact,phone,str(vals[15] or '').strip(),now(),count,'excel_all',code,'pending',1 if full and wait else 0,is_complete))
             c=conn.cursor()
             for m in members: c.execute('INSERT INTO registration_members(registration_id,member_name,member_idcard) VALUES(?,?,?)',(rid,*m))
             imported+=1; imported_by_event[e['id']]=imported_by_event.get(e['id'],0)+1
@@ -663,11 +747,11 @@ def _parse_public_bulk_sheet(events,ws,default_contact='',default_phone=''):
         for i in range(4):
             name=str(vals[7+i*2] or '').strip(); idc=str(vals[8+i*2] or '').strip()
             if name: members.append({'name':name,'idcard':idc})
-        if len(members)!=count:
-            errors.append(f'แถว {rowno}: จำนวนรายชื่อสมาชิกไม่ตรงกับจำนวนผู้เล่น'); continue
+        if len(members)>count or not incomplete_import_allowed(e,team,members):
+            errors.append(f'แถว {rowno}: รายชื่อนักกีฬาไม่ถูกต้อง'); continue
         if not contact or not phone:
             errors.append(f'แถว {rowno}: กรุณากรอกผู้ติดต่อและเบอร์โทรใน Excel หรือกรอกค่าเริ่มต้นก่อนอัปโหลด'); continue
-        records.append({'rowno':rowno,'event_id':int(e['id']),'event_name':event_display_name(e),'category_type':e['category_type'],'gender_type':e['gender_type'],'team_name':team,'affiliation':aff,'contact_name':contact,'phone':phone,'member_count':count,'members':members,'notes':str(vals[15] or '').strip()})
+        records.append({'rowno':rowno,'event_id':int(e['id']),'event_name':event_display_name(e),'category_type':e['category_type'],'gender_type':e['gender_type'],'team_name':team,'affiliation':aff,'contact_name':contact,'phone':phone,'member_count':count,'members':members,'is_complete':registration_is_complete(count,members),'notes':str(vals[15] or '').strip()})
     return records,errors
 
 
@@ -723,7 +807,7 @@ def public_bulk_register(tournament_id):
                 if full and not wait:
                     errors.append(f"แถว {record['rowno']}: {record['event_name']} เต็มแล้ว"); continue
                 code=unique_registration_code(conn)
-                rid=insert_returning_id(conn,'''INSERT INTO registrations(event_id,team_name,affiliation,contact_name,phone,notes,created_at,member_count,source,registration_code,status,is_waitlist) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',(e['id'],record['team_name'] or None,record['affiliation'] or None,record['contact_name'],record['phone'],record['notes'],now(),record['member_count'],'public_excel_all',code,'pending',1 if full and wait else 0))
+                rid=insert_returning_id(conn,'''INSERT INTO registrations(event_id,team_name,affiliation,contact_name,phone,notes,created_at,member_count,source,registration_code,status,is_waitlist,is_complete) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',(e['id'],record['team_name'] or None,record['affiliation'] or None,record['contact_name'],record['phone'],record['notes'],now(),record['member_count'],'public_excel_all',code,'pending',1 if full and wait else 0,record.get('is_complete',0)))
                 c=conn.cursor()
                 for m in record['members']: c.execute('INSERT INTO registration_members(registration_id,member_name,member_idcard) VALUES(?,?,?)',(rid,m['name'],m['idcard']))
                 item=dict(record); item.update(registration_code=code,registration_id=rid,is_waitlist=1 if full and wait else 0)
@@ -859,7 +943,7 @@ def print_event_certificates(event_id):
         t.cert_org,t.cert_date,t.cert_place,t.cert_signer,t.cert_signer_position,t.cert_style,t.cert_heading,t.cert_footer_note,
         t.cert_logo_1,t.cert_logo_2,t.cert_logo_3,t.cert_background,t.cert_signature,t.cert_stamp
         FROM registrations r JOIN events e ON r.event_id=e.id JOIN tournaments t ON e.tournament_id=t.id
-        WHERE r.event_id=? AND r.status='approved' AND r.is_waitlist=0 ORDER BY r.id''',(event_id,)).fetchall()
+        WHERE r.event_id=? AND r.status='approved' AND r.is_waitlist=0 AND r.is_complete=1 ORDER BY r.id''',(event_id,)).fetchall()
     certificates=[]
     for reg in regs:
         members=conn.execute('SELECT * FROM registration_members WHERE registration_id=? ORDER BY id',(reg['id'],)).fetchall()
