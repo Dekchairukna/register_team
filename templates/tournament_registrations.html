@@ -73,11 +73,18 @@
       <h3>{{ event_display_name(selected_event) if selected_event else 'ผู้สมัครทั้งหมด' }}</h3>
       <p class="muted">ผู้สมัครที่ไม่ได้เลือกอันดับรางวัล จะออกเกียรติบัตรเป็น “เข้าร่วมการแข่งขัน” โดยอัตโนมัติ</p>
     </div>
+    <form id="bulkDeleteForm" method="post" action="{{ url_for('delete_registrations_bulk',tournament_id=tournament['id']) }}" onsubmit="return confirmBulkDelete(event)" class="bulk-delete-form">
+      <input type="hidden" name="event_id" value="{{ selected_event_id or '' }}">
+      <label class="inline-check select-all-check"><input type="checkbox" id="selectAllRegistrations" onchange="toggleAllRegistrations(this.checked)"> เลือกทั้งหมด</label>
+      <button type="submit" name="action" value="delete_selected" class="btn btn-danger">ลบรายการที่เลือก</button>
+      <button type="submit" name="action" value="delete_all" class="btn btn-danger-outline">ลบทั้งหมด{{ 'ในอีเวนต์นี้' if selected_event else 'ที่แสดง' }}</button>
+    </form>
   </div>
 </div>
 
 {% for row in rows %}
 <div class="card registration-card">
+  <div class="registration-select-wrap"><label class="inline-check"><input class="registration-select" type="checkbox" name="registration_ids" value="{{ row['id'] }}" form="bulkDeleteForm"> เลือกรายการนี้</label></div>
   <div class="row-actions spread">
     <div>
       <h3>{{ row['team_name'] or 'รายการสมัครเดี่ยว / ยังไม่ได้ตั้งชื่อทีม' }}</h3>
@@ -134,6 +141,16 @@ function toggleCustomAward(select){
   const input=select.closest('.award-form').querySelector('.award-custom');
   input.classList.toggle('hidden',select.value!=='custom');
   if(select.value==='custom') input.focus();
+}
+function toggleAllRegistrations(checked){
+  document.querySelectorAll('.registration-select').forEach(el=>el.checked=checked);
+}
+function confirmBulkDelete(event){
+  const action=event.submitter ? event.submitter.value : 'delete_selected';
+  if(action==='delete_all') return confirm('ยืนยันลบผู้สมัครทั้งหมด{{ "ในอีเวนต์นี้" if selected_event else "ที่แสดงทั้งหมด" }}? การดำเนินการนี้ย้อนกลับไม่ได้');
+  const count=document.querySelectorAll('.registration-select:checked').length;
+  if(!count){ alert('กรุณาเลือกรายการที่ต้องการลบ'); return false; }
+  return confirm('ยืนยันลบผู้สมัครที่เลือก '+count+' รายการ?');
 }
 </script>
 {% endblock %}

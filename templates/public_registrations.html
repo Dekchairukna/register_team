@@ -1,0 +1,64 @@
+{% extends 'base.html' %}{% block title %}รายชื่อผู้สมัคร{% endblock %}{% block content %}
+<div class="card hero-card">
+  <div class="card-head">
+    <div>
+      <h1>รายชื่อผู้สมัคร</h1>
+      <h3>{{ tournament['title'] }}</h3>
+      <p class="muted">ตรวจสอบว่ารายการใดมีผู้สมัครแล้ว โดยระบบไม่แสดงเบอร์โทร เลขบัตรประชาชน หรือรหัสติดตามการสมัคร</p>
+    </div>
+    <div class="row-actions">
+      <a class="btn btn-secondary" href="{{ url_for('home') }}">← กลับหน้าสมัคร</a>
+      {% if tournament['is_open'] %}<a class="btn btn-soft" href="{{ url_for('public_bulk_register',tournament_id=tournament['id']) }}">อัปโหลดหลายทีม</a>{% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <form class="event-filter-form" method="get">
+    <label for="event_id">เลือกดูเฉพาะอีเวนต์</label>
+    <select id="event_id" name="event_id" onchange="this.form.submit()">
+      <option value="">ทุกอีเวนต์</option>
+      {% for e in events %}<option value="{{ e['id'] }}" {% if selected_event_id == e['id'] %}selected{% endif %}>{{ event_display_name(e) }} — สมัครแล้ว {{ count_map[e['id']] }} รายการ</option>{% endfor %}
+    </select>
+    {% if selected_event %}<a class="btn btn-soft" href="{{ url_for('public_tournament_registrations',tournament_id=tournament['id']) }}">ดูทุกอีเวนต์</a>{% endif %}
+  </form>
+</div>
+
+{% if not selected_event %}
+<div class="card tournament-card">
+  <div class="card-head"><div><h3>สรุปจำนวนผู้สมัครแยกตามอีเวนต์</h3><p class="muted">กดเปิดรายชื่อเพื่อดูชื่อทีมและนักกีฬา</p></div></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>อีเวนต์</th><th>จำนวนผู้สมัคร</th><th>Waiting List</th><th></th></tr></thead>
+      <tbody>
+      {% for e in events %}
+      <tr><td><strong>{{ event_display_name(e) }}</strong><div class="muted">{{ category_label(e['category_type']) }} · {{ gender_label(e['gender_type']) }} · {{ age_label(e['age_group']) }}</div></td><td>{{ count_map[e['id']] }}</td><td>{{ wait_map[e['id']] }}</td><td><a class="btn btn-soft btn-sm" href="{{ url_for('public_tournament_registrations',tournament_id=tournament['id'],event_id=e['id']) }}">เปิดรายชื่อ</a></td></tr>
+      {% else %}<tr><td colspan="4" class="empty-state">ยังไม่มีอีเวนต์</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-head"><div><h3>{{ event_display_name(selected_event) if selected_event else 'รายชื่อรวมทุกอีเวนต์' }}</h3><p class="muted">แสดงเฉพาะชื่อทีม ต้นสังกัด และรายชื่อนักกีฬา</p></div><span class="badge badge-soft">{{ rows|length }} รายการ</span></div>
+</div>
+
+{% for row in rows %}
+<div class="card public-registration-card">
+  <div class="card-head">
+    <div>
+      <h3>{{ row['team_name'] or (members_map[row['id']][0]['member_name'] if members_map[row['id']] else 'ผู้สมัคร') }}</h3>
+      <p class="muted">{{ row['event_name'] or category_label(row['category_type']) ~ ' ' ~ gender_label(row['gender_type']) ~ ' ' ~ age_label(row['age_group']) }}</p>
+    </div>
+    {% if row['is_waitlist'] %}<span class="badge">Waiting List</span>{% else %}<span class="badge badge-open">สมัครแล้ว</span>{% endif %}
+  </div>
+  <p><strong>ต้นสังกัด:</strong> {{ row['affiliation'] or '-' }}</p>
+  <div class="public-member-list">
+    {% for m in members_map[row['id']] %}<span>{{ loop.index }}. {{ m['member_name'] }}</span>{% endfor %}
+  </div>
+</div>
+{% else %}
+<div class="card empty-state">ยังไม่มีผู้สมัคร{{ 'ในอีเวนต์นี้' if selected_event else '' }}</div>
+{% endfor %}
+{% endblock %}

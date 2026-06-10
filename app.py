@@ -248,6 +248,32 @@ def home():
         count_map[t['id']]={e['id']:event_reg_count(e['id']) for e in events}
     conn.close(); return render_template('home.html',tournaments=tournaments,event_map=event_map,count_map=count_map)
 
+
+@app.route('/tournament/<int:tournament_id>/registrations')
+def public_tournament_registrations(tournament_id):
+    """Public applicant list. Intentionally excludes contact details, ID cards and private tracking codes."""
+    conn=get_db()
+    tournament=conn.execute('SELECT * FROM tournaments WHERE id=?',(tournament_id,)).fetchone()
+    if not tournament:
+        conn.close(); abort(404)
+    events=conn.execute('SELECT * FROM events WHERE tournament_id=? ORDER BY age_group,category_type,gender_type,id',(tournament_id,)).fetchall()
+    selected_event_id=request.args.get('event_id',type=int)
+    selected_event=None
+    if selected_event_id:
+        selected_event=next((e for e in events if e['id']==selected_event_id),None)
+        if not selected_event: selected_event_id=None
+    query='SELECT r.id,r.event_id,r.team_name,r.affiliation,r.member_count,r.is_waitlist,r.created_at,e.event_name,e.category_type,e.gender_type,e.age_group FROM registrations r JOIN events e ON r.event_id=e.id WHERE e.tournament_id=?'
+    args=[tournament_id]
+    if selected_event_id:
+        query += ' AND e.id=?'; args.append(selected_event_id)
+    query += ' ORDER BY e.id,r.id'
+    rows=conn.execute(query,args).fetchall()
+    members_map={r['id']:conn.execute('SELECT member_name FROM registration_members WHERE registration_id=? ORDER BY id',(r['id'],)).fetchall() for r in rows}
+    count_map={e['id']:event_reg_count(e['id']) for e in events}
+    wait_map={e['id']:max(0,event_reg_count(e['id'],True)-count_map[e['id']]) for e in events}
+    conn.close()
+    return render_template('public_registrations.html',tournament=tournament,events=events,selected_event=selected_event,selected_event_id=selected_event_id,rows=rows,members_map=members_map,count_map=count_map,wait_map=wait_map)
+
 @app.route('/event/<int:event_id>/register',methods=['GET','POST'])
 def register_event(event_id):
     conn=get_db(); event=conn.execute('SELECT * FROM events WHERE id=?',(event_id,)).fetchone()
@@ -876,6 +902,43 @@ def style_ws(ws):
 
 def excel_response(wb,name):
     out=BytesIO(); wb.save(out); out.seek(0); return send_file(out,as_attachment=True,download_name=name,mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+@app.route('/admin/tournament/<int:tournament_id>/registrations/delete-bulk',methods=['POST'])
+def delete_registrations_bulk(tournament_id):
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); tournament=get_owned_tournament(conn,tournament_id)
+    if not tournament:
+        conn.close(); return redirect(url_for('admin_dashboard'))
+    selected_event_id=request.form.get('event_id',type=int)
+    if selected_event_id:
+        owned_event=conn.execute('SELECT id FROM events WHERE id=? AND tournament_id=?',(selected_event_id,tournament_id)).fetchone()
+        if not owned_event: selected_event_id=None
+    action=request.form.get('action','delete_selected')
+    ids=[]
+    if action=='delete_all':
+        query='SELECT r.id FROM registrations r JOIN events e ON r.event_id=e.id WHERE e.tournament_id=?'
+        args=[tournament_id]
+        if selected_event_id:
+            query += ' AND e.id=?'; args.append(selected_event_id)
+        ids=[r['id'] for r in conn.execute(query,args).fetchall()]
+    else:
+        raw_ids=request.form.getlist('registration_ids')
+        selected=[]
+        for raw in raw_ids:
+            try: selected.append(int(raw))
+            except (TypeError,ValueError): pass
+        if selected:
+            marks=','.join(['?']*len(selected))
+            query=f'SELECT r.id FROM registrations r JOIN events e ON r.event_id=e.id WHERE e.tournament_id=? AND r.id IN ({marks})'
+            ids=[r['id'] for r in conn.execute(query,(tournament_id,*selected)).fetchall()]
+    conn.close()
+    if not ids:
+        flash('ยังไม่ได้เลือกรายการที่จะลบ')
+        return redirect(url_for('tournament_registrations',tournament_id=tournament_id,event_id=selected_event_id) if selected_event_id else url_for('tournament_registrations',tournament_id=tournament_id))
+    for rid in ids: delete_registration_internal(rid)
+    flash(f'ลบผู้สมัครเรียบร้อยแล้ว {len(ids)} รายการ')
+    return redirect(url_for('tournament_registrations',tournament_id=tournament_id,event_id=selected_event_id) if selected_event_id else url_for('tournament_registrations',tournament_id=tournament_id))
 
 @app.route('/admin/registration/<int:registration_id>/delete')
 def delete_registration(registration_id):
