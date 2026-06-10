@@ -1074,7 +1074,8 @@ def delete_registrations_bulk(tournament_id):
         if not owned_event: selected_event_id=None
     action=request.form.get('action','delete_selected')
     ids=[]
-    if action=='delete_all':
+    all_actions={'delete_all','approve_all'}
+    if action in all_actions:
         query='SELECT r.id FROM registrations r JOIN events e ON r.event_id=e.id WHERE e.tournament_id=?'
         args=[tournament_id]
         if selected_event_id:
@@ -1090,13 +1091,33 @@ def delete_registrations_bulk(tournament_id):
             marks=','.join(['?']*len(selected))
             query=f'SELECT r.id FROM registrations r JOIN events e ON r.event_id=e.id WHERE e.tournament_id=? AND r.id IN ({marks})'
             ids=[r['id'] for r in conn.execute(query,(tournament_id,*selected)).fetchall()]
-    conn.close()
+
+    redirect_url=url_for('tournament_registrations',tournament_id=tournament_id,event_id=selected_event_id) if selected_event_id else url_for('tournament_registrations',tournament_id=tournament_id)
     if not ids:
-        flash('ยังไม่ได้เลือกรายการที่จะลบ')
-        return redirect(url_for('tournament_registrations',tournament_id=tournament_id,event_id=selected_event_id) if selected_event_id else url_for('tournament_registrations',tournament_id=tournament_id))
+        conn.close()
+        flash('ยังไม่ได้เลือกรายการ')
+        return redirect(redirect_url)
+
+    if action in {'approve_selected','approve_all'}:
+        marks=','.join(['?']*len(ids))
+        eligible=conn.execute(f'''SELECT id FROM registrations
+            WHERE id IN ({marks}) AND is_complete=1 AND is_waitlist=0 AND status!='approved' ''',tuple(ids)).fetchall()
+        eligible_ids=[r['id'] for r in eligible]
+        if eligible_ids:
+            eligible_marks=','.join(['?']*len(eligible_ids))
+            conn.execute(f'''UPDATE registrations SET status='approved',approved_at=?
+                WHERE id IN ({eligible_marks})''',(now(),*eligible_ids))
+        skipped=len(ids)-len(eligible_ids)
+        conn.commit(); conn.close()
+        message=f'อนุมัติผู้สมัครเรียบร้อยแล้ว {len(eligible_ids)} รายการ'
+        if skipped: message += f' · ข้าม {skipped} รายการที่อนุมัติไม่ได้หรืออนุมัติไว้แล้ว'
+        flash(message)
+        return redirect(redirect_url)
+
+    conn.close()
     for rid in ids: delete_registration_internal(rid)
     flash(f'ลบผู้สมัครเรียบร้อยแล้ว {len(ids)} รายการ')
-    return redirect(url_for('tournament_registrations',tournament_id=tournament_id,event_id=selected_event_id) if selected_event_id else url_for('tournament_registrations',tournament_id=tournament_id))
+    return redirect(redirect_url)
 
 @app.route('/admin/registration/<int:registration_id>/delete')
 def delete_registration(registration_id):

@@ -77,6 +77,8 @@
     <form id="bulkDeleteForm" method="post" action="{{ url_for('delete_registrations_bulk',tournament_id=tournament['id']) }}" onsubmit="return confirmBulkDelete(event)" class="bulk-delete-form">
       <input type="hidden" name="event_id" value="{{ selected_event_id or '' }}">
       <label class="inline-check select-all-check"><input type="checkbox" id="selectAllRegistrations" onchange="toggleAllRegistrations(this.checked)"> เลือกทั้งหมด</label>
+      <button type="submit" name="action" value="approve_selected" class="btn btn-success">อนุมัติรายการที่เลือก</button>
+      <button type="submit" name="action" value="approve_all" class="btn btn-success">อนุมัติทั้งหมด{{ 'ในอีเวนต์นี้' if selected_event else 'ที่แสดง' }}</button>
       <button type="submit" name="action" value="delete_selected" class="btn btn-danger">ลบรายการที่เลือก</button>
       <button type="submit" name="action" value="delete_all" class="btn btn-danger-outline">ลบทั้งหมด{{ 'ในอีเวนต์นี้' if selected_event else 'ที่แสดง' }}</button>
     </form>
@@ -150,9 +152,11 @@ function toggleAllRegistrations(checked){
 }
 function confirmBulkDelete(event){
   const action=event.submitter ? event.submitter.value : 'delete_selected';
+  if(action==='approve_all') return confirm('ยืนยันอนุมัติผู้สมัครทั้งหมด{{ "ในอีเวนต์นี้" if selected_event else "ที่แสดงทั้งหมด" }}? ระบบจะข้าม Waiting List และรายการที่รายชื่อนักกีฬายังไม่ครบ');
   if(action==='delete_all') return confirm('ยืนยันลบผู้สมัครทั้งหมด{{ "ในอีเวนต์นี้" if selected_event else "ที่แสดงทั้งหมด" }}? การดำเนินการนี้ย้อนกลับไม่ได้');
   const count=document.querySelectorAll('.registration-select:checked').length;
-  if(!count){ alert('กรุณาเลือกรายการที่ต้องการลบ'); return false; }
+  if(!count){ alert('กรุณาเลือกรายการก่อน'); return false; }
+  if(action==='approve_selected') return confirm('ยืนยันอนุมัติผู้สมัครที่เลือก '+count+' รายการ? ระบบจะข้าม Waiting List และรายการที่รายชื่อนักกีฬายังไม่ครบ');
   return confirm('ยืนยันลบผู้สมัครที่เลือก '+count+' รายการ?');
 }
 </script>
