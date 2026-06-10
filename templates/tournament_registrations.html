@@ -31,6 +31,7 @@
       {% if tournament['certificates_enabled'] %}<a class="btn btn-warning" target="_blank" href="{{ url_for('print_event_certificates',event_id=selected_event['id']) }}">พิมพ์เกียรติบัตรทั้งอีเวนต์</a>{% else %}<a class="btn btn-warning" href="{{ url_for('certificate_settings',tournament_id=tournament['id']) }}">เปิดใช้งานเกียรติบัตร</a>{% endif %}
       <a class="btn btn-soft" href="{{ url_for('tournament_registrations',tournament_id=tournament['id']) }}">ดูทุกอีเวนต์</a>
     {% endif %}
+    <a class="btn btn-secondary" href="{{ url_for('export_tournament_excel',tournament_id=tournament['id']) }}">⇩ Export รายชื่อรวมทุกอีเวนต์</a>
   </form>
 </div>
 

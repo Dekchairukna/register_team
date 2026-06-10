@@ -330,6 +330,30 @@ def registration_status(code):
     cert_ready=bool(reg['is_complete'] and reg['certificates_enabled'] and reg['certificate_self_download'] and (not reg['certificate_require_approval'] or reg['status']=='approved'))
     return render_template('registration_status.html',reg=reg,members=members,cert_ready=cert_ready)
 
+@app.route('/certificate-search')
+def certificate_search():
+    """Public self-service certificate search by athlete name."""
+    query=(request.args.get('q') or '').strip()
+    results=[]
+    searched=False
+    if query:
+        searched=True
+        if len(query) < 2:
+            flash('กรุณากรอกชื่ออย่างน้อย 2 ตัวอักษร')
+        else:
+            conn=get_db()
+            like=f'%{query}%'
+            results=conn.execute('''SELECT m.id member_id,m.member_name,r.id registration_id,r.team_name,r.affiliation,r.status,r.is_waitlist,r.is_complete,r.award_result,r.award_custom,
+                e.event_name,e.category_type,e.gender_type,e.age_group,t.title tournament_title,t.certificates_enabled,t.certificate_self_download,t.certificate_require_approval
+                FROM registration_members m
+                JOIN registrations r ON m.registration_id=r.id
+                JOIN events e ON r.event_id=e.id
+                JOIN tournaments t ON e.tournament_id=t.id
+                WHERE m.member_name LIKE ?
+                ORDER BY t.id DESC,e.id,r.id,m.id''',(like,)).fetchall()
+            conn.close()
+    return render_template('certificate_search.html',query=query,results=results,searched=searched)
+
 @app.route('/login',methods=['GET','POST'])
 def login():
     if request.method=='POST':
@@ -920,8 +944,9 @@ def get_or_create_cert(conn,registration_id,member_id=None,ctype='individual'):
 
 def get_cert_data(registration_id,member_id=None,ctype='individual'):
     conn=get_db(); reg=conn.execute('''SELECT r.*,e.event_name,e.category_type,e.gender_type,e.age_group,t.title tournament_title,t.certificates_enabled,t.certificate_self_download,t.certificate_require_approval,t.cert_org,t.cert_date,t.cert_place,t.cert_signer,t.cert_signer_position,t.cert_style,t.cert_heading,t.cert_footer_note,t.cert_logo_1,t.cert_logo_2,t.cert_logo_3,t.cert_background,t.cert_signature,t.cert_stamp FROM registrations r JOIN events e ON r.event_id=e.id JOIN tournaments t ON e.tournament_id=t.id WHERE r.id=?''',(registration_id,)).fetchone()
-    if not reg or not cert_access(reg): conn.close(); abort(403)
+    if not reg or not cert_access(reg) or not reg['is_complete']: conn.close(); abort(403)
     member=conn.execute('SELECT * FROM registration_members WHERE id=? AND registration_id=?',(member_id,registration_id)).fetchone() if member_id else None
+    if member_id is not None and not member: conn.close(); abort(404)
     code=get_or_create_cert(conn,registration_id,member_id,ctype); conn.close(); return reg,member,code
 
 @app.route('/certificate/<int:registration_id>/member/<int:member_id>')
@@ -965,6 +990,55 @@ def certificate_qr(code):
 @app.route('/verify/<code>')
 def verify_certificate(code):
     conn=get_db(); cert=conn.execute('''SELECT c.*,r.team_name,r.affiliation,r.award_result,r.award_custom,m.member_name,e.event_name,e.category_type,e.gender_type,e.age_group,t.title tournament_title FROM certificates c JOIN registrations r ON c.registration_id=r.id LEFT JOIN registration_members m ON c.member_id=m.id JOIN events e ON r.event_id=e.id JOIN tournaments t ON e.tournament_id=t.id WHERE c.verification_code=?''',(code,)).fetchone(); conn.close(); return render_template('verify_certificate.html',cert=cert,code=code)
+
+def safe_sheet_title(raw, used_titles):
+    invalid='[]:*?/\\'
+    title=''.join('_' if ch in invalid else ch for ch in str(raw or 'อีเวนต์')).strip() or 'อีเวนต์'
+    title=title[:31]
+    base=title
+    suffix=2
+    while title in used_titles:
+        marker=f'_{suffix}'
+        title=(base[:31-len(marker)] + marker)
+        suffix += 1
+    used_titles.add(title)
+    return title
+
+
+def append_registration_export_sheet(conn, ws, event, registrations):
+    ws.append(['ลำดับ','รหัสสมัคร','อีเวนต์','ชื่อทีม','ต้นสังกัด','ผู้ติดต่อ','เบอร์โทร','จำนวนผู้เล่น','ข้อมูลครบ','สถานะ','ผลการแข่งขัน','สำรอง','แหล่งข้อมูล','สมาชิก 1','เลขบัตร 1','สมาชิก 2','เลขบัตร 2','สมาชิก 3','เลขบัตร 3','สมาชิก 4','เลขบัตร 4','หมายเหตุ'])
+    for idx,r in enumerate(registrations,1):
+        ms=conn.execute('SELECT * FROM registration_members WHERE registration_id=? ORDER BY id',(r['id'],)).fetchall()
+        row=[idx,r['registration_code'],event_display_name(event),r['team_name'] or '',r['affiliation'] or '',r['contact_name'],r['phone'],r['member_count'],'ครบ' if r['is_complete'] else 'ยังไม่ครบ',r['status'],award_label(r['award_result'],r['award_custom']),'ใช่' if r['is_waitlist'] else 'ไม่',r['source']]
+        for i in range(4): row += [ms[i]['member_name'],ms[i]['member_idcard'] or ''] if i<len(ms) else ['','']
+        row += [r['notes'] or '']
+        ws.append(row)
+    style_ws(ws)
+
+
+@app.route('/admin/tournament/<int:tournament_id>/export-all')
+def export_tournament_excel(tournament_id):
+    """Download one workbook for competition management, separated by event sheets."""
+    if not is_logged_in(): return redirect(url_for('login'))
+    conn=get_db(); tournament=get_owned_tournament(conn,tournament_id)
+    if not tournament: conn.close(); abort(404)
+    events=conn.execute('SELECT * FROM events WHERE tournament_id=? ORDER BY age_group,category_type,gender_type,id',(tournament_id,)).fetchall()
+    wb=openpyxl.Workbook(); summary_ws=wb.active; summary_ws.title='สรุปอีเวนต์'
+    summary_ws.append(['ลำดับ','อีเวนต์','ประเภท','เพศ','รุ่น','ผู้สมัครหลัก','Waiting List','ข้อมูลยังไม่ครบ','อนุมัติแล้ว'])
+    used_titles={'สรุปอีเวนต์'}
+    for idx,event in enumerate(events,1):
+        regs=conn.execute('SELECT * FROM registrations WHERE event_id=? ORDER BY is_waitlist,id',(event['id'],)).fetchall()
+        active=sum(1 for r in regs if not r['is_waitlist'])
+        waiting=sum(1 for r in regs if r['is_waitlist'])
+        incomplete=sum(1 for r in regs if not r['is_complete'])
+        approved=sum(1 for r in regs if r['status']=='approved')
+        summary_ws.append([idx,event_display_name(event),category_label(event['category_type']),gender_label(event['gender_type']),age_label(event['age_group']),active,waiting,incomplete,approved])
+        ws=wb.create_sheet(safe_sheet_title(event_display_name(event),used_titles))
+        append_registration_export_sheet(conn,ws,event,regs)
+    conn.close(); style_ws(summary_ws)
+    filename=f'tournament_{tournament_id}_all_registrations.xlsx'
+    return excel_response(wb,filename)
+
 
 @app.route('/admin/event/<int:event_id>/export')
 def export_event_excel(event_id):

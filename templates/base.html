@@ -62,7 +62,7 @@
                 <button class="font-size-btn font-size-icon-normal" type="button" data-font-reset="true" onclick="setFontScale(1)" title="คืนค่าขนาดตัวหนังสือปกติ" aria-label="คืนค่าขนาดตัวหนังสือปกติ">A</button>
                 <button class="font-size-btn font-size-icon-large" type="button" onclick="adjustFontScale(1)" title="เพิ่มขนาดตัวหนังสือ" aria-label="เพิ่มขนาดตัวหนังสือ">A+</button>
             </div>
-            <nav class="public-nav"><a href="{{ url_for('home') }}">หน้าหลัก</a><a class="btn btn-soft" href="{{ url_for('login') }}">เข้าสู่ระบบแอดมิน</a></nav>
+            <nav class="public-nav"><a href="{{ url_for('home') }}">หน้าหลัก</a><a href="{{ url_for('certificate_search') }}">ค้นหาเกียรติบัตร</a><a class="btn btn-soft" href="{{ url_for('login') }}">เข้าสู่ระบบแอดมิน</a></nav>
         </div>
     </header>
     <main class="public-container">
