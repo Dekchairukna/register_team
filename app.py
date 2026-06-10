@@ -439,12 +439,15 @@ def tournament_registrations(tournament_id):
     if selected_event_id:
         selected_event=next((e for e in events if e['id']==selected_event_id),None)
         if not selected_event: selected_event_id=None
-    query='''SELECT r.*,e.event_name,e.category_type,e.gender_type,e.age_group,e.fee,e.has_fee,e.fee_per FROM registrations r JOIN events e ON r.event_id=e.id WHERE e.tournament_id=?'''
-    args=[tournament_id]
+    status_filter=request.args.get('status_filter','pending')
+    if status_filter not in {'pending','approved'}: status_filter='pending'
+    base_query='''SELECT r.*,e.event_name,e.category_type,e.gender_type,e.age_group,e.fee,e.has_fee,e.fee_per FROM registrations r JOIN events e ON r.event_id=e.id WHERE e.tournament_id=?'''
+    base_args=[tournament_id]
     if selected_event_id:
-        query += ' AND e.id=?'; args.append(selected_event_id)
-    query += ' ORDER BY e.id,r.id DESC'
-    rows=conn.execute(query,args).fetchall()
+        base_query += ' AND e.id=?'; base_args.append(selected_event_id)
+    all_rows=conn.execute(base_query + ' ORDER BY e.id,r.id DESC',base_args).fetchall()
+    query=base_query + (" AND r.status='approved'" if status_filter=='approved' else " AND r.status!='approved'") + ' ORDER BY e.id,r.id DESC'
+    rows=conn.execute(query,base_args).fetchall()
     members_map={r['id']:conn.execute('SELECT * FROM registration_members WHERE registration_id=? ORDER BY id',(r['id'],)).fetchall() for r in rows}
     summary=[]
     for e in events:
@@ -456,14 +459,16 @@ def tournament_registrations(tournament_id):
             FROM registrations WHERE event_id=?''',(e['id'],)).fetchone()
         summary.append(dict(event=e,total=st['total'] or 0,approved=st['approved'] or 0,pending=st['pending'] or 0,waitlist=st['waitlist'] or 0,awarded=st['awarded'] or 0))
     stats={
-        'total':len(rows),
-        'approved':sum(1 for r in rows if r['status']=='approved'),
-        'pending':sum(1 for r in rows if r['status']!='approved'),
-        'waitlist':sum(1 for r in rows if r['is_waitlist']),
-        'awarded':sum(1 for r in rows if (r['award_result'] or 'participant')!='participant')
+        'total':len(all_rows),
+        'approved':sum(1 for r in all_rows if r['status']=='approved'),
+        'pending':sum(1 for r in all_rows if r['status']!='approved'),
+        'waitlist':sum(1 for r in all_rows if r['is_waitlist']),
+        'incomplete':sum(1 for r in all_rows if not r['is_complete']),
+        'awarded':sum(1 for r in all_rows if (r['award_result'] or 'participant')!='participant'),
+        'visible':len(rows)
     }
     conn.close()
-    return render_template('tournament_registrations.html',tournament=t,events=events,selected_event=selected_event,selected_event_id=selected_event_id,rows=rows,members_map=members_map,summary=summary,stats=stats)
+    return render_template('tournament_registrations.html',tournament=t,events=events,selected_event=selected_event,selected_event_id=selected_event_id,status_filter=status_filter,rows=rows,members_map=members_map,summary=summary,stats=stats)
 
 @app.route('/admin/registration/<int:registration_id>/approve')
 def approve_registration(registration_id):
@@ -473,7 +478,9 @@ def approve_registration(registration_id):
     if r['status']!='approved' and not r['is_complete']:
         conn.close(); flash('ยังอนุมัติไม่ได้ เพราะรายชื่อนักกีฬายังไม่ครบ กรุณากดแก้ไขข้อมูลก่อน')
         return redirect(url_for('tournament_registrations',tournament_id=r['tournament_id'],event_id=r['event_id']))
-    new='pending' if r['status']=='approved' else 'approved'; conn.execute('UPDATE registrations SET status=?,approved_at=? WHERE id=?',(new,now() if new=='approved' else None,registration_id)); conn.commit(); conn.close(); flash('อัปเดตสถานะเรียบร้อยแล้ว'); return redirect(url_for('tournament_registrations',tournament_id=r['tournament_id'],event_id=r['event_id']))
+    new='pending' if r['status']=='approved' else 'approved'; conn.execute('UPDATE registrations SET status=?,approved_at=? WHERE id=?',(new,now() if new=='approved' else None,registration_id)); conn.commit(); conn.close(); flash('อัปเดตสถานะเรียบร้อยแล้ว')
+    return_tab=request.args.get('status_filter') or ('approved' if new=='pending' else 'pending')
+    return redirect(url_for('tournament_registrations',tournament_id=r['tournament_id'],event_id=r['event_id'],status_filter=return_tab))
 
 @app.route('/admin/registration/<int:registration_id>/edit',methods=['GET','POST'])
 def edit_registration(registration_id):
@@ -1069,6 +1076,8 @@ def delete_registrations_bulk(tournament_id):
     if not tournament:
         conn.close(); return redirect(url_for('admin_dashboard'))
     selected_event_id=request.form.get('event_id',type=int)
+    status_filter=request.form.get('status_filter','pending')
+    if status_filter not in {'pending','approved'}: status_filter='pending'
     if selected_event_id:
         owned_event=conn.execute('SELECT id FROM events WHERE id=? AND tournament_id=?',(selected_event_id,tournament_id)).fetchone()
         if not owned_event: selected_event_id=None
@@ -1080,6 +1089,7 @@ def delete_registrations_bulk(tournament_id):
         args=[tournament_id]
         if selected_event_id:
             query += ' AND e.id=?'; args.append(selected_event_id)
+        query += " AND r.status='approved'" if status_filter=='approved' else " AND r.status!='approved'"
         ids=[r['id'] for r in conn.execute(query,args).fetchall()]
     else:
         raw_ids=request.form.getlist('registration_ids')
@@ -1092,7 +1102,7 @@ def delete_registrations_bulk(tournament_id):
             query=f'SELECT r.id FROM registrations r JOIN events e ON r.event_id=e.id WHERE e.tournament_id=? AND r.id IN ({marks})'
             ids=[r['id'] for r in conn.execute(query,(tournament_id,*selected)).fetchall()]
 
-    redirect_url=url_for('tournament_registrations',tournament_id=tournament_id,event_id=selected_event_id) if selected_event_id else url_for('tournament_registrations',tournament_id=tournament_id)
+    redirect_url=url_for('tournament_registrations',tournament_id=tournament_id,event_id=selected_event_id,status_filter=status_filter) if selected_event_id else url_for('tournament_registrations',tournament_id=tournament_id,status_filter=status_filter)
     if not ids:
         conn.close()
         flash('ยังไม่ได้เลือกรายการ')

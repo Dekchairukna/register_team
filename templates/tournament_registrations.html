@@ -20,6 +20,7 @@
     </div>
   </div>
   <form method="get" class="event-filter-form">
+    <input type="hidden" name="status_filter" value="{{ status_filter }}">
     <select name="event_id" onchange="this.form.submit()">
       <option value="">ทุกอีเวนต์</option>
       {% for e in events %}
@@ -29,16 +30,16 @@
     {% if selected_event %}
       <a class="btn btn-secondary" href="{{ url_for('export_event_excel',event_id=selected_event['id']) }}">⇩ Export รายชื่ออีเวนต์นี้</a>
       {% if tournament['certificates_enabled'] %}<a class="btn btn-warning" target="_blank" href="{{ url_for('print_event_certificates',event_id=selected_event['id']) }}">พิมพ์เกียรติบัตรทั้งอีเวนต์</a>{% else %}<a class="btn btn-warning" href="{{ url_for('certificate_settings',tournament_id=tournament['id']) }}">เปิดใช้งานเกียรติบัตร</a>{% endif %}
-      <a class="btn btn-soft" href="{{ url_for('tournament_registrations',tournament_id=tournament['id']) }}">ดูทุกอีเวนต์</a>
+      <a class="btn btn-soft" href="{{ url_for('tournament_registrations',tournament_id=tournament['id'],status_filter=status_filter) }}">ดูทุกอีเวนต์</a>
     {% endif %}
     <a class="btn btn-secondary" href="{{ url_for('export_tournament_excel',tournament_id=tournament['id']) }}">⇩ Export รายชื่อรวมทุกอีเวนต์</a>
   </form>
 </div>
 
 <div class="grid four-col">
-  <div class="card stat-card"><div class="stat-label">ผู้สมัครที่แสดง</div><div class="stat-number">{{ stats['total'] }}</div><div class="stat-note">{{ 'เฉพาะอีเวนต์ที่เลือก' if selected_event else 'รวมทุกอีเวนต์' }}</div></div>
+  <div class="card stat-card"><div class="stat-label">ผู้สมัครทั้งหมด</div><div class="stat-number">{{ stats['total'] }}</div><div class="stat-note">{{ 'เฉพาะอีเวนต์ที่เลือก' if selected_event else 'รวมทุกอีเวนต์' }}</div></div>
   <div class="card stat-card"><div class="stat-label">อนุมัติแล้ว</div><div class="stat-number">{{ stats['approved'] }}</div><div class="stat-note">พร้อมออกเกียรติบัตรตามเงื่อนไข</div></div>
-  <div class="card stat-card"><div class="stat-label">รอตรวจสอบ</div><div class="stat-number">{{ stats['pending'] }}</div><div class="stat-note">ควรตรวจรายชื่อก่อนอนุมัติ</div></div>
+  <div class="card stat-card"><div class="stat-label">รอตรวจสอบ</div><div class="stat-number">{{ stats['pending'] }}</div><div class="stat-note">ข้อมูลไม่ครบ {{ stats['incomplete'] }} รายการ</div></div>
   <div class="card stat-card"><div class="stat-label">กำหนดรางวัลแล้ว</div><div class="stat-number">{{ stats['awarded'] }}</div><div class="stat-note">ที่เหลือเป็นเข้าร่วมอัตโนมัติ</div></div>
 </div>
 
@@ -54,10 +55,10 @@
         <td><strong>{{ event_display_name(item['event']) }}</strong><div class="muted">{{ category_label(item['event']['category_type']) }} · {{ gender_label(item['event']['gender_type']) }} · {{ age_label(item['event']['age_group']) }}</div></td>
         <td>{{ item['total'] }}</td>
         <td><span class="badge badge-open">{{ item['approved'] }}</span></td>
-        <td>{{ item['pending'] }}</td>
+        <td><span class="badge {% if item['pending'] %}badge-attention{% else %}badge-soft{% endif %}">{{ item['pending'] }}</span></td>
         <td>{{ item['waitlist'] }}</td>
         <td>{{ item['awarded'] }}</td>
-        <td><div class="row-actions"><a class="btn btn-soft btn-sm" href="{{ url_for('tournament_registrations',tournament_id=tournament['id'],event_id=item['event']['id']) }}">เปิดรายชื่อ</a><a class="btn btn-secondary btn-sm" href="{{ url_for('export_event_excel',event_id=item['event']['id']) }}">Export</a></div></td>
+        <td><div class="row-actions"><a class="btn btn-soft btn-sm" href="{{ url_for('tournament_registrations',tournament_id=tournament['id'],event_id=item['event']['id'],status_filter='pending') }}">เปิดรายชื่อ</a><a class="btn btn-secondary btn-sm" href="{{ url_for('export_event_excel',event_id=item['event']['id']) }}">Export</a></div></td>
       </tr>
       {% else %}
       <tr><td colspan="7" class="empty-state">ยังไม่มีอีเวนต์</td></tr>
@@ -68,17 +69,36 @@
 </div>
 {% endif %}
 
+<div class="registration-tabs">
+  <a class="registration-tab {% if status_filter=='pending' %}active pending{% endif %}" href="{{ url_for('tournament_registrations',tournament_id=tournament['id'],event_id=selected_event_id,status_filter='pending') }}">
+    <span class="tab-icon">⏳</span><span><strong>รอตรวจสอบ</strong><small>{{ stats['pending'] }} รายการ · ข้อมูลไม่ครบ {{ stats['incomplete'] }}</small></span>
+  </a>
+  <a class="registration-tab {% if status_filter=='approved' %}active approved{% endif %}" href="{{ url_for('tournament_registrations',tournament_id=tournament['id'],event_id=selected_event_id,status_filter='approved') }}">
+    <span class="tab-icon">✓</span><span><strong>อนุมัติแล้ว</strong><small>{{ stats['approved'] }} รายการ · พร้อมจัดการแข่งขัน</small></span>
+  </a>
+</div>
+
+{% if status_filter=='pending' %}
+<div class="review-alert">
+  <strong>รายการที่ยังต้องตรวจสอบ</strong>
+  <span>สีส้ม = รออนุมัติ · สีแดง = จำนวนนักกีฬาหรือรายชื่อยังไม่ครบ กรุณากดแก้ไขข้อมูลก่อนอนุมัติ</span>
+</div>
+{% endif %}
+
 <div class="card">
   <div class="card-head">
     <div>
-      <h3>{{ event_display_name(selected_event) if selected_event else 'ผู้สมัครทั้งหมด' }}</h3>
+      <h3>{{ event_display_name(selected_event) if selected_event else 'ผู้สมัครทั้งหมด' }} · {{ 'รอตรวจสอบ' if status_filter=='pending' else 'อนุมัติแล้ว' }}</h3>
       <p class="muted">ผู้สมัครที่ไม่ได้เลือกอันดับรางวัล จะออกเกียรติบัตรเป็น “เข้าร่วมการแข่งขัน” โดยอัตโนมัติ</p>
     </div>
     <form id="bulkDeleteForm" method="post" action="{{ url_for('delete_registrations_bulk',tournament_id=tournament['id']) }}" onsubmit="return confirmBulkDelete(event)" class="bulk-delete-form">
       <input type="hidden" name="event_id" value="{{ selected_event_id or '' }}">
+      <input type="hidden" name="status_filter" value="{{ status_filter }}">
       <label class="inline-check select-all-check"><input type="checkbox" id="selectAllRegistrations" onchange="toggleAllRegistrations(this.checked)"> เลือกทั้งหมด</label>
+      {% if status_filter=='pending' %}
       <button type="submit" name="action" value="approve_selected" class="btn btn-success">อนุมัติรายการที่เลือก</button>
       <button type="submit" name="action" value="approve_all" class="btn btn-success">อนุมัติทั้งหมด{{ 'ในอีเวนต์นี้' if selected_event else 'ที่แสดง' }}</button>
+      {% endif %}
       <button type="submit" name="action" value="delete_selected" class="btn btn-danger">ลบรายการที่เลือก</button>
       <button type="submit" name="action" value="delete_all" class="btn btn-danger-outline">ลบทั้งหมด{{ 'ในอีเวนต์นี้' if selected_event else 'ที่แสดง' }}</button>
     </form>
@@ -86,18 +106,18 @@
 </div>
 
 {% for row in rows %}
-<div class="card registration-card">
+<div class="card registration-card {% if not row['is_complete'] %}registration-incomplete{% elif row['status']!='approved' %}registration-pending{% else %}registration-approved{% endif %}">
   <div class="registration-select-wrap"><label class="inline-check"><input class="registration-select" type="checkbox" name="registration_ids" value="{{ row['id'] }}" form="bulkDeleteForm"> เลือกรายการนี้</label></div>
   <div class="row-actions spread">
     <div>
       <h3>{{ row['team_name'] or 'รายการสมัครเดี่ยว / ยังไม่ได้ตั้งชื่อทีม' }}</h3>
       <p><strong>รหัสสมัคร:</strong> <span class="code">{{ row['registration_code'] }}</span> <span class="badge badge-soft">{{ row['event_name'] or category_label(row['category_type']) ~ ' ' ~ gender_label(row['gender_type']) ~ ' ' ~ age_label(row['age_group']) }}</span></p>
       <p><strong>ต้นสังกัด:</strong> {{ row['affiliation'] or '-' }} · <strong>จำนวน:</strong> {{ row['member_count'] }} คน · <strong>ผู้ติดต่อ:</strong> {{ row['contact_name'] }} {{ row['phone'] }}</p>
-      <p><strong>สถานะ:</strong> <span class="badge {% if row['status']=='approved' %}badge-open{% else %}badge-soft{% endif %}">{{ 'อนุมัติแล้ว' if row['status']=='approved' else 'รอตรวจสอบ' }}</span> {% if row['is_waitlist'] %}<span class="badge">Waiting List</span>{% endif %} {% if not row['is_complete'] %}<span class="badge badge-closed">รายชื่อนักกีฬายังไม่ครบ</span>{% else %}<span class="badge badge-open">ข้อมูลครบ</span>{% endif %}</p>
+      <p><strong>สถานะ:</strong> <span class="badge {% if row['status']=='approved' %}badge-open{% else %}badge-attention{% endif %}">{{ 'อนุมัติแล้ว' if row['status']=='approved' else 'รอตรวจสอบ' }}</span> {% if row['is_waitlist'] %}<span class="badge">Waiting List</span>{% endif %} {% if not row['is_complete'] %}<span class="badge badge-closed">รายชื่อนักกีฬายังไม่ครบ</span>{% else %}<span class="badge badge-open">ข้อมูลครบ</span>{% endif %}</p>
     </div>
     <div class="row-actions">
       <a class="btn btn-warning" href="{{ url_for('edit_registration',registration_id=row['id']) }}">แก้ไขข้อมูล</a>
-      <a class="btn {% if row['status']=='approved' %}btn-secondary{% else %}btn-success{% endif %}" href="{{ url_for('approve_registration',registration_id=row['id']) }}">{{ 'ยกเลิกอนุมัติ' if row['status']=='approved' else 'อนุมัติรายชื่อ' }}</a>
+      <a class="btn {% if row['status']=='approved' %}btn-secondary{% else %}btn-success{% endif %}" href="{{ url_for('approve_registration',registration_id=row['id'],status_filter=status_filter) }}">{{ 'ยกเลิกอนุมัติ' if row['status']=='approved' else 'อนุมัติรายชื่อ' }}</a>
       <a class="btn btn-soft" target="_blank" href="{{ url_for('registration_status',code=row['registration_code']) }}">หน้าสถานะ</a>
       <a class="btn btn-danger" href="{{ url_for('delete_registration',registration_id=row['id']) }}" onclick="return confirm('ลบผู้สมัครนี้?')">ลบ</a>
     </div>
@@ -138,7 +158,7 @@
   {% if tournament['certificates_enabled'] and row['is_complete'] %}<p><a target="_blank" href="{{ url_for('certificate_team',registration_id=row['id']) }}">เปิดเกียรติบัตรแบบทีม →</a></p>{% elif not row['is_complete'] %}<p class="muted">กรุณาเติมรายชื่อนักกีฬาให้ครบก่อนออกเกียรติบัตร</p>{% endif %}
 </div>
 {% else %}
-<div class="card empty-state">ยังไม่มีผู้สมัครใน{{ 'อีเวนต์นี้' if selected_event else 'งานแข่งขันนี้' }}</div>
+<div class="card empty-state">{{ 'ไม่มีรายการที่รอตรวจสอบ' if status_filter=='pending' else 'ยังไม่มีรายการที่อนุมัติแล้ว' }}ใน{{ 'อีเวนต์นี้' if selected_event else 'งานแข่งขันนี้' }}</div>
 {% endfor %}
 
 <script>
