@@ -1,1 +1,51 @@
-{% extends 'base.html' %}{% block title %}สถานะการสมัคร{% endblock %}{% block content %}<div class="card"><h1>{{ 'บันทึกข้อมูลเรียบร้อยแล้ว' if cert_only else 'สมัครเรียบร้อยแล้ว' }}</h1><h2>{{ reg['tournament_title'] }}</h2><p><strong>รหัสรายการ:</strong> <span class="code">{{ reg['registration_code'] }}</span></p><p><strong>อีเวนต์:</strong> {{ event_display_name(reg) }}</p><p><strong>ชนิดกีฬา:</strong> {{ sport_competition_label(reg) }} · <strong>รุ่น:</strong> {{ age_label(reg['age_group']) }} · <strong>ประเภท:</strong> {{ gender_label(reg['gender_type']) }}</p><p><strong>ชื่อทีม:</strong> {{ reg['team_name'] or '-' }} | <strong>ต้นสังกัด:</strong> {{ reg['affiliation'] or '-' }}</p>{% if reg['coach_name'] %}<p><strong>ผู้ฝึกสอน:</strong> {{ reg['coach_name'] }}</p>{% endif %}<p><strong>สถานะ:</strong> {{ 'พร้อมปริ้นเกียรติบัตร' if cert_ready else ('อนุมัติแล้ว' if reg['status']=='approved' else 'รอตรวจสอบจากผู้ดูแล') }} {% if reg['is_waitlist'] %}<span class="badge">รายชื่อสำรอง</span>{% endif %}</p>{% if not reg['is_complete'] %}<p class="flash warning-flash"><strong>รายชื่อนักกีฬายังไม่ครบ</strong> กรุณาติดต่อผู้ดูแลเพื่อเพิ่มหรือแก้ไขรายชื่อก่อนออกเกียรติบัตร</p>{% endif %}{% if not cert_only %}<p><strong>ผลการแข่งขัน:</strong> <span class="badge badge-soft">{{ award_label(reg['award_result'],reg['award_custom']) }}</span></p>{% endif %}<h3>รายชื่อนักกีฬา</h3><ol>{% for m in members %}<li>{{ m['member_name'] }} {% if cert_ready %}- <a target="_blank" href="{{ url_for('certificate_member',registration_id=reg['id'],member_id=m['id']) }}">เปิดเกียรติบัตร</a>{% endif %}</li>{% endfor %}{% for i in range((reg['member_count'] or 0) - (members|length)) %}<li class="muted">ยังไม่ได้ระบุชื่อนักกีฬา</li>{% endfor %}</ol>{% if cert_ready %}<div class="row-actions"><a class="btn btn-warning" target="_blank" href="{{ url_for('certificate_team',registration_id=reg['id']) }}">เปิดเกียรติบัตรแบบทีม</a>{% if reg['coach_name'] %}<a class="btn btn-warning" target="_blank" href="{{ url_for('certificate_coach',registration_id=reg['id']) }}">เปิดเกียรติบัตรผู้ฝึกสอน</a>{% endif %}<a class="btn btn-soft" href="{{ url_for('certificate_search') }}">ค้นหาเกียรติบัตร</a></div>{% elif reg['certificates_enabled'] %}<p class="flash">เกียรติบัตรจะดาวน์โหลดได้หลังจากผู้ดูแลอนุมัติรายชื่อ หรือตรวจสอบการตั้งค่าดาวน์โหลดเกียรติบัตร</p>{% else %}<p class="flash">งานนี้ยังไม่ได้เปิดใช้งานเกียรติบัตร กรุณาให้แอดมินเข้าไปตั้งค่าเกียรติบัตรก่อน</p>{% endif %}</div>{% endblock %}
+{% extends 'base.html' %}
+{% block title %}สถานะการสมัคร{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>{{ 'บันทึกข้อมูลเรียบร้อยแล้ว' if cert_only else 'สมัครเรียบร้อยแล้ว' }}</h1>
+  <h2>{{ reg['tournament_title'] }}</h2>
+
+  <p><strong>รหัสรายการ:</strong> <span class="code">{{ reg['registration_code'] }}</span></p>
+  <p><strong>อีเวนต์:</strong> {{ event_display_name(reg) }}</p>
+  <p><strong>ชนิดกีฬา:</strong> {{ sport_competition_label(reg) }} · <strong>รุ่น:</strong> {{ age_label(reg['age_group']) }} · <strong>ประเภท:</strong> {{ gender_label(reg['gender_type']) }}</p>
+  <p><strong>ชื่อทีม:</strong> {{ reg['team_name'] or '-' }} | <strong>ต้นสังกัด:</strong> {{ reg['affiliation'] or '-' }}</p>
+  {% if reg['coach_name'] %}<p><strong>ผู้ฝึกสอน:</strong> {{ reg['coach_name'] }}</p>{% endif %}
+  <p><strong>สถานะ:</strong> {{ 'พร้อมปริ้นเกียรติบัตร' if cert_ready else ('อนุมัติแล้ว' if reg['status']=='approved' else 'รอตรวจสอบจากผู้ดูแล') }} {% if reg['is_waitlist'] %}<span class="badge">รายชื่อสำรอง</span>{% endif %}</p>
+
+  {% if not reg['is_complete'] and not cert_only %}
+    <p class="flash warning-flash"><strong>รายชื่อนักกีฬายังไม่ครบ</strong> กรุณาแก้ไขรายชื่อก่อนออกเกียรติบัตร</p>
+  {% elif cert_only and (reg['member_count'] or 0) > (members|length) %}
+    <p class="flash warning-flash"><strong>มีช่องรายชื่อนักกีฬาว่าง</strong> ช่องว่างจะถือว่าไม่มีนักกีฬา และจะไม่ออกเกียรติบัตรรายบุคคล</p>
+  {% endif %}
+
+  {% if not cert_only %}
+    <p><strong>ผลการแข่งขัน:</strong> <span class="badge badge-soft">{{ award_label(reg['award_result'],reg['award_custom']) }}</span></p>
+  {% endif %}
+
+  <div class="row-actions">
+    <a class="btn btn-warning" href="{{ url_for('public_edit_registration',code=reg['registration_code']) }}">แก้ไขทีมนี้ / เติมรายชื่อนักกีฬา</a>
+  </div>
+
+  <h3>รายชื่อนักกีฬา</h3>
+  <ol>
+    {% for m in members %}
+      <li>{{ m['member_name'] }} {% if cert_ready %}- <a target="_blank" href="{{ url_for('certificate_member',registration_id=reg['id'],member_id=m['id']) }}">เปิดเกียรติบัตร</a>{% endif %}</li>
+    {% endfor %}
+    {% for i in range((reg['member_count'] or 0) - (members|length)) %}
+      <li class="muted">ช่องว่าง — ไม่มีนักกีฬา</li>
+    {% endfor %}
+  </ol>
+
+  {% if cert_ready %}
+    <div class="row-actions">
+      <a class="btn btn-warning" target="_blank" href="{{ url_for('certificate_team',registration_id=reg['id']) }}">เปิดเกียรติบัตรแบบทีม</a>
+      {% if reg['coach_name'] %}<a class="btn btn-warning" target="_blank" href="{{ url_for('certificate_coach',registration_id=reg['id']) }}">เปิดเกียรติบัตรผู้ฝึกสอน</a>{% endif %}
+      <a class="btn btn-soft" href="{{ url_for('certificate_search') }}">ค้นหาเกียรติบัตร</a>
+    </div>
+  {% elif reg['certificates_enabled'] %}
+    <p class="flash">เกียรติบัตรจะดาวน์โหลดได้หลังจากผู้ดูแลอนุมัติรายชื่อ หรือตรวจสอบการตั้งค่าดาวน์โหลดเกียรติบัตร</p>
+  {% else %}
+    <p class="flash">งานนี้ยังไม่ได้เปิดใช้งานเกียรติบัตร กรุณาให้แอดมินเข้าไปตั้งค่าเกียรติบัตรก่อน</p>
+  {% endif %}
+</div>
+{% endblock %}

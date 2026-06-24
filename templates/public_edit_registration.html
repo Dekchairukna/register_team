@@ -1,0 +1,39 @@
+{% extends 'base.html' %}
+{% block title %}แก้ไขข้อมูลทีม{% endblock %}
+{% block content %}
+<div class="card form-card-wide">
+  <h1>แก้ไขข้อมูลทีม</h1>
+  <h2>{{ reg['tournament_title'] }}</h2>
+  <p class="muted">ใช้สำหรับแก้ชื่อทีม/แก้ชื่อนักกีฬาที่กรอกผิด หรือเติมชื่อในช่องว่าง ช่องไหนไม่กรอกจะถือว่าไม่มีนักกีฬา และจะไม่ออกเกียรติบัตรรายบุคคลให้ช่องนั้น</p>
+  <div class="count-box">
+    <div class="count-item">รหัสรายการ {{ reg['registration_code'] }}</div>
+    <div class="count-item">{{ event_display_name(reg) }}</div>
+    <div class="count-item">{{ sport_competition_label(reg) }}</div>
+    <div class="count-item">{{ gender_label(reg['gender_type']) }}</div>
+    <div class="count-item">{{ age_label(reg['age_group']) }}</div>
+    <div class="count-item">ช่องรายชื่อ {{ slot_count }} ช่อง</div>
+  </div>
+</div>
+
+<div class="card form-card-wide">
+  <form method="post">
+    <label>ชื่อทีม</label>
+    <input name="team_name" value="{{ reg['team_name'] or '' }}" {% if is_certificate_only_event(reg) or reg['category_type']=='team' %}required{% endif %}>
+
+    <h3>รายชื่อนักกีฬา</h3>
+    <p class="flash warning-flash"><strong>หมายเหตุ:</strong> เว้นว่างได้ ช่องว่าง = ไม่มีนักกีฬา / ไม่มีใบเกียรติบัตรรายบุคคล</p>
+
+    {% for m in slot_members %}
+      <div class="member-edit-slot">
+        <label>นักกีฬาคนที่ {{ loop.index }}</label>
+        <input name="member_name_{{ loop.index }}" value="{{ m['member_name'] if m else '' }}" placeholder="เว้นว่างได้ ถ้าไม่มีนักกีฬาคนนี้">
+      </div>
+    {% endfor %}
+
+    <div class="row-actions">
+      <button type="submit" class="btn btn-success">บันทึกการแก้ไข</button>
+      <a class="btn btn-secondary" href="{{ url_for('registration_status',code=reg['registration_code']) }}">กลับหน้าสถานะ</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

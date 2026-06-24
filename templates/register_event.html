@@ -9,7 +9,7 @@
   {% if not cert_only %}<div class="count-item">{% if event['has_fee'] %}{{ event['fee'] }} บาท/{{ fee_per_label(event['fee_per']) }}{% else %}สมัครฟรี{% endif %}</div>{% endif %}
   <div class="count-item">{% if event['has_limit'] %}กรอกแล้ว {{ reg_count }}/{{ event['max_slots'] }}{% else %}ไม่จำกัดจำนวน{% endif %}</div>
 </div>
-{% if cert_only %}<p class="muted">กรอกชื่อทีม ชื่อนักกีฬา และผู้ฝึกสอน แล้วระบบจะพาไปหน้าปริ้นเกียรติบัตรทันที</p>{% endif %}
+{% if cert_only %}<p class="muted">กรอกชื่อทีม ชื่อนักกีฬา และผู้ฝึกสอน แล้วระบบจะพาไปหน้าปริ้นเกียรติบัตรทันที ช่องชื่อนักกีฬาที่เว้นว่างจะถือว่าไม่มีนักกีฬา</p>{% endif %}
 {% if full and can_waitlist %}<p class="flash">จำนวนหลักเต็มแล้ว รายการใหม่จะเข้าสู่รายชื่อสำรอง</p>{% elif full %}<p class="flash">จำนวนรับสมัครเต็มแล้ว</p>{% endif %}</div>
 {% if not full or can_waitlist %}<div class="card"><form method="post" enctype="multipart/form-data">
 <label>จำนวนนักกีฬา</label><select name="member_count" id="member_count" onchange="renderMembers()">{% for n in allowed_counts %}<option value="{{ n }}" {% if n==default_member_count %}selected{% endif %}>{{ n }} คน</option>{% endfor %}</select>
@@ -29,7 +29,7 @@ function renderMembers(){
   const count=parseInt(document.getElementById('member_count').value);
   let h='';
   for(let i=1;i<=count;i++){
-    h+=`<hr><h3>นักกีฬาคนที่ ${i}</h3><label>ชื่อ-สกุล</label><input name="member_name_${i}" required>`;
+    h+=`<hr><h3>นักกีฬาคนที่ ${i}</h3><label>ชื่อ-สกุล <span class="muted">${certOnly ? '(เว้นว่างได้ ถ้าไม่มีนักกีฬาคนนี้)' : '(บังคับ)'}</span></label><input name="member_name_${i}" ${certOnly ? '' : 'required'}>`;
     if(!certOnly){
       h+=`<label>เลขบัตรประชาชน</label><input name="member_idcard_${i}"><label>อัปโหลดบัตรประชาชน</label><input type="file" name="idcard_file_${i}" accept=".jpg,.jpeg,.png,.webp,.pdf">`;
     }

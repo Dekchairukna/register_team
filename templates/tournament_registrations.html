@@ -116,7 +116,8 @@
       <p><strong>สถานะ:</strong> <span class="badge {% if row['status']=='approved' %}badge-open{% else %}badge-attention{% endif %}">{{ 'อนุมัติแล้ว' if row['status']=='approved' else 'รอตรวจสอบ' }}</span> {% if row['is_waitlist'] %}<span class="badge">Waiting List</span>{% endif %} {% if not row['is_complete'] %}<span class="badge badge-closed">รายชื่อนักกีฬายังไม่ครบ</span>{% else %}<span class="badge badge-open">ข้อมูลครบ</span>{% endif %}</p>
     </div>
     <div class="row-actions">
-      <a class="btn btn-warning" href="{{ url_for('edit_registration',registration_id=row['id']) }}">แก้ไขข้อมูล</a>
+      <a class="btn btn-warning" href="{{ url_for('edit_registration',registration_id=row['id']) }}">แก้ไขข้อมูลแอดมิน</a>
+      <a class="btn btn-soft" target="_blank" href="{{ url_for('public_edit_registration',code=row['registration_code']) }}">ปุ่มแก้ไขทีมนี้</a>
       <a class="btn {% if row['status']=='approved' %}btn-secondary{% else %}btn-success{% endif %}" href="{{ url_for('approve_registration',registration_id=row['id'],status_filter=status_filter) }}">{{ 'ยกเลิกอนุมัติ' if row['status']=='approved' else 'อนุมัติรายชื่อ' }}</a>
       <a class="btn btn-soft" target="_blank" href="{{ url_for('registration_status',code=row['registration_code']) }}">หน้าสถานะ</a>
       <a class="btn btn-danger" href="{{ url_for('delete_registration',registration_id=row['id']) }}" onclick="return confirm('ลบผู้สมัครนี้?')">ลบ</a>
@@ -151,7 +152,7 @@
       {% for m in members_map[row['id']] %}
       <tr><td>{{ loop.index }}</td><td>{{ m['member_name'] }}</td><td>{{ m['member_idcard'] or '-' }}</td><td>{% if tournament['certificates_enabled'] and row['is_complete'] %}<a target="_blank" href="{{ url_for('certificate_member',registration_id=row['id'],member_id=m['id']) }}">เปิดเกียรติบัตร</a>{% elif not row['is_complete'] %}<span class="muted">เติมรายชื่อให้ครบก่อน</span>{% else %}<span class="muted">ยังไม่เปิดใช้งาน</span>{% endif %}</td></tr>
       {% endfor %}
-      {% for i in range((row['member_count'] or 0) - (members_map[row['id']]|length)) %}<tr class="missing-member-row"><td>{{ (members_map[row['id']]|length) + loop.index }}</td><td><span class="muted">ยังไม่ได้ระบุชื่อนักกีฬา</span></td><td>-</td><td><span class="muted">รอแก้ไขข้อมูล</span></td></tr>{% endfor %}
+      {% for i in range((row['member_count'] or 0) - (members_map[row['id']]|length)) %}<tr class="missing-member-row"><td>{{ (members_map[row['id']]|length) + loop.index }}</td><td><span class="muted">ช่องว่าง — ไม่มีนักกีฬา</span></td><td>-</td><td><a class="btn btn-soft btn-sm" target="_blank" href="{{ url_for('public_edit_registration',code=row['registration_code']) }}">เติมชื่อ</a></td></tr>{% endfor %}
       </tbody>
     </table>
   </div>

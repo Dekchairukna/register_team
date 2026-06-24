@@ -183,7 +183,10 @@ def init_db():
     c.execute("UPDATE events SET has_limit = CASE WHEN max_slots > 0 THEN 1 ELSE 0 END")
     c.execute("UPDATE registrations SET registration_code = 'REG-' || LPAD(CAST(id AS TEXT), 6, '0') WHERE registration_code IS NULL OR registration_code = ''" if IS_POSTGRES else "UPDATE registrations SET registration_code = 'REG-' || printf('%06d', id) WHERE registration_code IS NULL OR registration_code = ''")
     c.execute("UPDATE registrations SET member_count = (SELECT COUNT(*) FROM registration_members m WHERE m.registration_id = registrations.id) WHERE member_count IS NULL OR member_count < 1")
-    c.execute("UPDATE registrations SET is_complete = CASE WHEN (SELECT COUNT(*) FROM registration_members m WHERE m.registration_id = registrations.id) >= member_count THEN 1 ELSE 0 END")
+    c.execute("""UPDATE registrations SET is_complete = CASE
+        WHEN EXISTS (SELECT 1 FROM events e WHERE e.id = registrations.event_id AND e.event_mode = 'certificate_only') THEN 1
+        WHEN (SELECT COUNT(*) FROM registration_members m WHERE m.registration_id = registrations.id) >= member_count THEN 1
+        ELSE 0 END""")
     c.execute('CREATE INDEX IF NOT EXISTS idx_events_tournament_id ON events(tournament_id)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_registrations_event_id ON registrations(event_id)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_registration_members_registration_id ON registration_members(registration_id)')
@@ -407,7 +410,7 @@ def public_tournament_registrations(tournament_id):
     if selected_event_id:
         selected_event=next((e for e in events if e['id']==selected_event_id),None)
         if not selected_event: selected_event_id=None
-    query='SELECT r.id,r.event_id,r.team_name,r.affiliation,r.member_count,r.is_complete,r.is_waitlist,r.created_at,e.event_name,e.category_type,e.gender_type,e.age_group,e.event_mode,e.sport_name,e.fixed_member_count FROM registrations r JOIN events e ON r.event_id=e.id WHERE e.tournament_id=?'
+    query='SELECT r.id,r.event_id,r.registration_code,r.team_name,r.affiliation,r.member_count,r.is_complete,r.is_waitlist,r.created_at,e.event_name,e.category_type,e.gender_type,e.age_group,e.event_mode,e.sport_name,e.fixed_member_count FROM registrations r JOIN events e ON r.event_id=e.id WHERE e.tournament_id=?'
     args=[tournament_id]
     if selected_event_id:
         query += ' AND e.id=?'; args.append(selected_event_id)
@@ -453,7 +456,13 @@ def register_event(event_id):
             idc='' if cert_only else request.form.get(f'member_idcard_{i}','').strip()
             f=None if cert_only else request.files.get(f'idcard_file_{i}')
             fn=None
-            if not n: flash(f'กรุณากรอกชื่อนักกีฬาคนที่ {i}'); return redirect(url_for('register_event',event_id=event_id))
+            # โหมดออกเกียรติบัตรอย่างเดียว: เว้นว่างได้ ช่องว่าง = ไม่มีนักกีฬา ไม่ออกใบรายบุคคล
+            # โหมดสมัครแข่งขันปกติ: ยังบังคับกรอกชื่อนักกีฬาตามจำนวนเดิม
+            if not n:
+                if cert_only:
+                    continue
+                flash(f'กรุณากรอกชื่อนักกีฬาคนที่ {i}')
+                return redirect(url_for('register_event',event_id=event_id))
             if f and f.filename:
                 fn=save_uploaded_file(f,f'idcard_{i}')
                 if not fn: flash('ไฟล์บัตรประชาชนต้องเป็น JPG PNG WEBP หรือ PDF'); return redirect(url_for('register_event',event_id=event_id))
@@ -466,7 +475,7 @@ def register_event(event_id):
         conn=get_db(); code=unique_registration_code(conn); wait=1 if full and can_waitlist else 0
         status='approved' if cert_only else 'pending'
         source='certificate_only' if cert_only else 'web'
-        complete=registration_is_complete(member_count,[{'name':m[0]} for m in members])
+        complete=1 if cert_only else registration_is_complete(member_count,[{'name':m[0]} for m in members])
         rid=insert_returning_id(conn,'''INSERT INTO registrations(event_id,team_name,affiliation,contact_name,phone,slip_filename,notes,created_at,member_count,source,registration_code,status,is_waitlist,is_complete,coach_name,approved_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(event_id,team_name or None,affiliation or None,contact,phone,slip,notes,now(),member_count,source,code,status,wait,complete,coach_name or None,now() if cert_only else None)); c=conn.cursor()
         for m in members: c.execute('INSERT INTO registration_members(registration_id,member_name,member_idcard,idcard_file) VALUES(?,?,?,?)',(rid,*m))
         conn.commit(); conn.close(); return redirect(url_for('registration_status',code=code))
@@ -478,8 +487,66 @@ def registration_status(code):
     if not reg: conn.close(); abort(404)
     members=conn.execute('SELECT * FROM registration_members WHERE registration_id=? ORDER BY id',(reg['id'],)).fetchall(); conn.close()
     instant=is_certificate_only_event(reg)
-    cert_ready=bool(reg['is_complete'] and reg['certificates_enabled'] and reg['certificate_self_download'] and (instant or not reg['certificate_require_approval'] or reg['status']=='approved'))
+    cert_ready=bool((instant or reg['is_complete']) and reg['certificates_enabled'] and reg['certificate_self_download'] and (instant or not reg['certificate_require_approval'] or reg['status']=='approved'))
     return render_template('registration_status.html',reg=reg,members=members,cert_ready=cert_ready,cert_only=instant)
+
+@app.route('/registration/<code>/edit', methods=['GET','POST'])
+def public_edit_registration(code):
+    """ให้ผู้สมัครแก้ไขชื่อทีมและรายชื่อนักกีฬาในช่องที่กำหนดไว้ได้เอง
+    - ไม่มีปุ่มลบรายการสมัคร
+    - ช่องชื่อนักกีฬาที่เว้นว่าง = ไม่มีนักกีฬา และจะไม่ออกเกียรติบัตรรายบุคคล
+    - เติมชื่อกลับเข้าไปในช่องว่างได้ภายหลัง
+    """
+    conn=get_db()
+    reg=conn.execute('''SELECT r.*,e.event_name,e.category_type,e.gender_type,e.age_group,e.has_fee,e.fee,e.fee_per,e.event_mode,e.sport_name,e.fixed_member_count,t.title tournament_title,t.certificates_enabled,t.certificate_self_download,t.certificate_require_approval
+                        FROM registrations r
+                        JOIN events e ON r.event_id=e.id
+                        JOIN tournaments t ON e.tournament_id=t.id
+                        WHERE r.registration_code=?''',(code,)).fetchone()
+    if not reg:
+        conn.close(); abort(404)
+    members=conn.execute('SELECT * FROM registration_members WHERE registration_id=? ORDER BY id',(reg['id'],)).fetchall()
+    slot_count=max(int(reg['member_count'] or 0), len(members), 1)
+
+    if request.method=='POST':
+        team_name=request.form.get('team_name','').strip()
+        team_required=is_certificate_only_event(reg) or reg['category_type']=='team'
+        if team_required and not team_name:
+            conn.close(); flash('กรุณากรอกชื่อทีม')
+            return redirect(url_for('public_edit_registration',code=code))
+
+        new_members=[]
+        removed_files=[]
+        for i in range(1,slot_count+1):
+            name=request.form.get(f'member_name_{i}','').strip()
+            old_member=members[i-1] if i-1 < len(members) else None
+            if name:
+                new_members.append((name, old_member['member_idcard'] if old_member else '', old_member['idcard_file'] if old_member else None))
+            elif old_member and old_member['idcard_file']:
+                removed_files.append(old_member['idcard_file'])
+
+        # เก็บจำนวนช่องไว้เท่าเดิม เพื่อให้ผู้สมัครกลับมาเติมชื่อในช่องว่างได้
+        complete=1 if is_certificate_only_event(reg) else registration_is_complete(slot_count,[{'name':m[0]} for m in new_members])
+        status=reg['status']
+        if status=='approved' and not complete:
+            status='pending'
+
+        conn.execute('DELETE FROM certificates WHERE registration_id=?',(reg['id'],))
+        conn.execute('DELETE FROM registration_members WHERE registration_id=?',(reg['id'],))
+        conn.execute('UPDATE registrations SET team_name=?, is_complete=?, status=? WHERE id=?',(team_name or None,complete,status,reg['id']))
+        for file_name in removed_files:
+            delete_uploaded_file(file_name)
+        for m in new_members:
+            conn.execute('INSERT INTO registration_members(registration_id,member_name,member_idcard,idcard_file) VALUES(?,?,?,?)',(reg['id'],*m))
+        conn.commit(); conn.close()
+        flash('แก้ไขข้อมูลทีมเรียบร้อยแล้ว ช่องว่างจะไม่นับเป็นนักกีฬาและไม่ออกเกียรติบัตรรายบุคคล')
+        return redirect(url_for('registration_status',code=code))
+
+    slot_members=[]
+    for i in range(slot_count):
+        slot_members.append(members[i] if i < len(members) else None)
+    conn.close()
+    return render_template('public_edit_registration.html',reg=reg,members=members,slot_members=slot_members,slot_count=slot_count)
 
 @app.route('/certificate-search')
 def certificate_search():
@@ -1209,7 +1276,7 @@ def get_or_create_cert(conn,registration_id,member_id=None,ctype='individual'):
 
 def get_cert_data(registration_id,member_id=None,ctype='individual'):
     conn=get_db(); reg=conn.execute('''SELECT r.*,e.event_name,e.category_type,e.gender_type,e.age_group,e.event_mode,e.sport_name,e.fixed_member_count,t.title tournament_title,t.certificates_enabled,t.certificate_self_download,t.certificate_require_approval,t.cert_org,t.cert_date,t.cert_place,t.cert_signer,t.cert_signer_position,t.cert_style,t.cert_heading,t.cert_footer_note,t.cert_logo_1,t.cert_logo_2,t.cert_logo_3,t.cert_background,t.cert_signature,t.cert_stamp FROM registrations r JOIN events e ON r.event_id=e.id JOIN tournaments t ON e.tournament_id=t.id WHERE r.id=?''',(registration_id,)).fetchone()
-    if not reg or not cert_access(reg) or not reg['is_complete']: conn.close(); abort(403)
+    if not reg or not cert_access(reg) or (not is_certificate_only_event(reg) and not reg['is_complete']): conn.close(); abort(403)
     member=conn.execute('SELECT * FROM registration_members WHERE id=? AND registration_id=?',(member_id,registration_id)).fetchone() if member_id else None
     if member_id is not None and not member: conn.close(); abort(404)
     code=get_or_create_cert(conn,registration_id,member_id,ctype); conn.close(); return reg,member,code

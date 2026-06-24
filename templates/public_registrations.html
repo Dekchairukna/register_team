@@ -51,11 +51,19 @@
       <h3>{{ row['team_name'] or (members_map[row['id']][0]['member_name'] if members_map[row['id']] else 'ผู้สมัคร') }}</h3>
       <p class="muted">{{ row['event_name'] or category_label(row['category_type']) ~ ' ' ~ gender_label(row['gender_type']) ~ ' ' ~ age_label(row['age_group']) }}</p>
     </div>
-    {% if row['is_waitlist'] %}<span class="badge">Waiting List</span>{% else %}<span class="badge badge-open">สมัครแล้ว</span>{% endif %} {% if not row['is_complete'] %}<span class="badge badge-closed">รายชื่อยังไม่ครบ</span>{% endif %}
+    <div class="row-actions">
+      {% if row['is_waitlist'] %}<span class="badge">Waiting List</span>{% else %}<span class="badge badge-open">สมัครแล้ว</span>{% endif %}
+      {% if not row['is_complete'] %}<span class="badge badge-closed">รายชื่อยังไม่ครบ</span>{% endif %}
+      <a class="btn btn-warning btn-sm" href="{{ url_for('public_edit_registration',code=row['registration_code']) }}">แก้ไขทีมนี้</a>
+    </div>
   </div>
   <p><strong>ต้นสังกัด:</strong> {{ row['affiliation'] or '-' }}</p>
   <div class="public-member-list">
-    {% for m in members_map[row['id']] %}<span>{{ loop.index }}. {{ m['member_name'] }}</span>{% endfor %}{% for i in range((row['member_count'] or 0) - (members_map[row['id']]|length)) %}<span class="missing-member">{{ (members_map[row['id']]|length) + loop.index }}. ยังไม่ระบุชื่อ</span>{% endfor %}
+    {% for m in members_map[row['id']] %}<span>{{ loop.index }}. {{ m['member_name'] }}</span>{% endfor %}{% for i in range((row['member_count'] or 0) - (members_map[row['id']]|length)) %}<span class="missing-member">{{ (members_map[row['id']]|length) + loop.index }}. ช่องว่าง — ไม่มีนักกีฬา</span>{% endfor %}
+  </div>
+  <div class="row-actions">
+    <a class="btn btn-soft btn-sm" href="{{ url_for('registration_status',code=row['registration_code']) }}">ดูสถานะ/ปริ้นเกียรติบัตร</a>
+    <a class="btn btn-warning btn-sm" href="{{ url_for('public_edit_registration',code=row['registration_code']) }}">แก้ไขทีมนี้</a>
   </div>
 </div>
 {% else %}
