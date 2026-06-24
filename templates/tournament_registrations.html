@@ -111,8 +111,8 @@
   <div class="row-actions spread">
     <div>
       <h3>{{ row['team_name'] or 'รายการสมัครเดี่ยว / ยังไม่ได้ตั้งชื่อทีม' }}</h3>
-      <p><strong>รหัสสมัคร:</strong> <span class="code">{{ row['registration_code'] }}</span> <span class="badge badge-soft">{{ row['event_name'] or category_label(row['category_type']) ~ ' ' ~ gender_label(row['gender_type']) ~ ' ' ~ age_label(row['age_group']) }}</span></p>
-      <p><strong>ต้นสังกัด:</strong> {{ row['affiliation'] or '-' }} · <strong>จำนวน:</strong> {{ row['member_count'] }} คน · <strong>ผู้ติดต่อ:</strong> {{ row['contact_name'] }} {{ row['phone'] }}</p>
+      <p><strong>รหัสสมัคร:</strong> <span class="code">{{ row['registration_code'] }}</span> <span class="badge badge-soft">{{ event_display_name(row) }}</span></p>
+      <p><strong>ต้นสังกัด:</strong> {{ row['affiliation'] or '-' }} · <strong>จำนวน:</strong> {{ row['member_count'] }} คน · <strong>ผู้ติดต่อ:</strong> {{ row['contact_name'] }} {{ row['phone'] }}{% if row['coach_name'] %} · <strong>ผู้ฝึกสอน:</strong> {{ row['coach_name'] }}{% endif %}</p>
       <p><strong>สถานะ:</strong> <span class="badge {% if row['status']=='approved' %}badge-open{% else %}badge-attention{% endif %}">{{ 'อนุมัติแล้ว' if row['status']=='approved' else 'รอตรวจสอบ' }}</span> {% if row['is_waitlist'] %}<span class="badge">Waiting List</span>{% endif %} {% if not row['is_complete'] %}<span class="badge badge-closed">รายชื่อนักกีฬายังไม่ครบ</span>{% else %}<span class="badge badge-open">ข้อมูลครบ</span>{% endif %}</p>
     </div>
     <div class="row-actions">

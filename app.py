@@ -1,9 +1,10 @@
 from flask import Flask, render_template, request, redirect, url_for, session, flash, send_from_directory, send_file, abort, jsonify
-import sqlite3, os, uuid, secrets, json, tempfile, time
-from datetime import datetime
+import sqlite3, os, uuid, secrets, json, tempfile, time, re
+from datetime import datetime, timedelta
 from io import BytesIO
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
+from markupsafe import Markup, escape
 import openpyxl
 import qrcode
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -28,6 +29,58 @@ app.config['MAX_CONTENT_LENGTH'] = 15 * 1024 * 1024
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 BULK_IMPORT_CACHE_FOLDER = os.environ.get('BULK_IMPORT_CACHE_FOLDER', os.path.join(tempfile.gettempdir(), 'register_team_bulk_imports'))
 os.makedirs(BULK_IMPORT_CACHE_FOLDER, exist_ok=True)
+
+
+def format_signer_position(value):
+    """แสดงตำแหน่งผู้ลงนามให้ขึ้นบรรทัดใหม่ได้ทั้งจาก Enter และการเว้นวรรค 2 ครั้ง"""
+    text = str(value or '').replace('\r\n', '\n').replace('\r', '\n').strip()
+    text = re.sub(r' {2,}', '\n', text)
+    lines = [escape(line.strip()) for line in text.split('\n')]
+    return Markup('<br>'.join(lines))
+
+
+THAI_MONTHS_FULL = [
+    '', 'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
+    'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'
+]
+
+
+def thai_today_text():
+    """วันที่ปัจจุบันตามเวลาไทย สำหรับใช้เมื่อแอดมินยังไม่ได้กรอกช่วงวันจัดกิจกรรม"""
+    d = datetime.utcnow() + timedelta(hours=7)
+    return f"{d.day} {THAI_MONTHS_FULL[d.month]} {d.year + 543}"
+
+
+def format_cert_issue_date(value):
+    """
+    แปลงช่องวันจัดกิจกรรมเป็นวันที่ในบรรทัด "ให้ไว้ ณ วันที่ ..."
+    - ถ้าเป็นช่วง เช่น 8-10 กรกฎาคม 2569 ให้ใช้วันสุดท้าย คือ 10 กรกฎาคม 2569
+    - ถ้าระบุวันเดียว ให้ใช้วันนั้น
+    - ถ้าไม่ได้กรอก ให้ใช้วันที่ปัจจุบันตามเวลาไทย
+    """
+    text = str(value or '').replace('\r', ' ').replace('\n', ' ').strip()
+    if not text:
+        return thai_today_text()
+
+    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r'^วันที่\s*', '', text).strip()
+    text = text.replace('–', '-').replace('—', '-').replace('−', '-')
+
+    # รูปแบบที่พบบ่อย: 8-10 กรกฎาคม 2569, 8 - 10 ก.ค. 2569, 8-10/7/2569
+    m = re.search(r'(?:^|\D)(\d{1,2})\s*-\s*(\d{1,2})(.*)$', text)
+    if m:
+        return (m.group(2) + (m.group(3) or '')).strip()
+
+    # รูปแบบอีกแบบ: 8 กรกฎาคม - 10 กรกฎาคม 2569
+    m = re.search(r'-\s*(\d{1,2}\s+.+)$', text)
+    if m:
+        return m.group(1).strip()
+
+    return text
+
+
+app.jinja_env.filters['signer_position'] = format_signer_position
+app.jinja_env.filters['cert_issue_date'] = format_cert_issue_date
 
 
 class PostgresCursor:
@@ -121,10 +174,11 @@ def init_db():
         ('cert_background','TEXT'),('cert_signature','TEXT'),('cert_stamp','TEXT')]: ensure_column(c,'tournaments',name,ddl)
     for name, ddl in [
         ('has_fee','INTEGER NOT NULL DEFAULT 0'),('fee_per','TEXT NOT NULL DEFAULT \'team\''),('require_slip','INTEGER NOT NULL DEFAULT 0'),
-        ('has_limit','INTEGER NOT NULL DEFAULT 1'),('waitlist_enabled','INTEGER NOT NULL DEFAULT 0'),('waitlist_limit','INTEGER NOT NULL DEFAULT 0')]: ensure_column(c,'events',name,ddl)
+        ('has_limit','INTEGER NOT NULL DEFAULT 1'),('waitlist_enabled','INTEGER NOT NULL DEFAULT 0'),('waitlist_limit','INTEGER NOT NULL DEFAULT 0'),
+        ('event_mode',"TEXT NOT NULL DEFAULT 'competition'"),('sport_name','TEXT'),('fixed_member_count','INTEGER NOT NULL DEFAULT 0')]: ensure_column(c,'events',name,ddl)
     for name, ddl in [
         ('affiliation','TEXT'),('member_count','INTEGER NOT NULL DEFAULT 1'),('source','TEXT NOT NULL DEFAULT \'web\''),
-        ('registration_code','TEXT'),('status','TEXT NOT NULL DEFAULT \'pending\''),('is_waitlist','INTEGER NOT NULL DEFAULT 0'),('approved_at','TEXT'),('award_result',"TEXT NOT NULL DEFAULT 'participant'"),('award_custom','TEXT'),('award_updated_at','TEXT'),('is_complete','INTEGER NOT NULL DEFAULT 1')]: ensure_column(c,'registrations',name,ddl)
+        ('registration_code','TEXT'),('status','TEXT NOT NULL DEFAULT \'pending\''),('is_waitlist','INTEGER NOT NULL DEFAULT 0'),('approved_at','TEXT'),('award_result',"TEXT NOT NULL DEFAULT 'participant'"),('award_custom','TEXT'),('award_updated_at','TEXT'),('is_complete','INTEGER NOT NULL DEFAULT 1'),('coach_name','TEXT')]: ensure_column(c,'registrations',name,ddl)
     c.execute("UPDATE events SET has_fee = CASE WHEN fee > 0 THEN 1 ELSE has_fee END")
     c.execute("UPDATE events SET has_limit = CASE WHEN max_slots > 0 THEN 1 ELSE 0 END")
     c.execute("UPDATE registrations SET registration_code = 'REG-' || LPAD(CAST(id AS TEXT), 6, '0') WHERE registration_code IS NULL OR registration_code = ''" if IS_POSTGRES else "UPDATE registrations SET registration_code = 'REG-' || printf('%06d', id) WHERE registration_code IS NULL OR registration_code = ''")
@@ -145,6 +199,16 @@ def allowed_file(filename, exts=ALLOWED_EXTENSIONS): return '.' in filename and 
 
 def now(): return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
+def row_value(row, key, default=None):
+    try:
+        if hasattr(row, 'keys') and key in row.keys():
+            return row[key]
+        if isinstance(row, dict):
+            return row.get(key, default)
+    except Exception:
+        pass
+    return default
+
 def category_label(v): return {'single':'เดี่ยว','pair':'คู่','team':'ทีม'}.get(v,v)
 
 def gender_label(v): return {'male':'ชาย','female':'หญิง','mixed':'ผสม','open':'ไม่ระบุ'}.get(v,v)
@@ -152,6 +216,53 @@ def gender_label(v): return {'male':'ชาย','female':'หญิง','mixed':
 def age_label(v): return {'youth':'เยาวชน','general':'ทั่วไป','senior':'อาวุโส'}.get(v,v)
 
 def fee_per_label(v): return {'person':'คน','team':'ทีม'}.get(v,v)
+
+def event_mode_label(v): return {'competition':'สมัครแข่งขันปกติ','certificate_only':'ออกเกียรติบัตรอย่างเดียว'}.get(v or 'competition', v or 'สมัครแข่งขันปกติ')
+
+def is_certificate_only_event(e): return (row_value(e, 'event_mode', 'competition') or 'competition') == 'certificate_only'
+
+def sport_name_text(e):
+    raw=str(row_value(e, 'sport_name', '') or '').strip()
+    return raw or 'เปตอง'
+
+def sport_competition_label(e):
+    raw=sport_name_text(e)
+    return raw if raw.startswith('กีฬา') else f'กีฬา{raw}'
+
+
+def cert_category_line(e):
+    """ข้อความประเภท/เพศ/รุ่น สำหรับแสดงบนเกียรติบัตร โดยไม่ซ้ำชื่องานแข่งขัน"""
+    category = str(category_label(row_value(e, 'category_type', '')) or '').strip()
+    gender = str(gender_label(row_value(e, 'gender_type', '')) or '').strip()
+    age_raw = str(row_value(e, 'age_group', '') or '').strip()
+    age = str(age_label(age_raw) if age_raw in {'youth', 'general', 'senior'} else age_raw).strip()
+
+    kind = category
+    if gender and gender != 'ไม่ระบุ':
+        kind = f"{kind}{gender}" if kind else gender
+
+    parts = []
+    if kind:
+        parts.append(kind)
+    if age:
+        if age.startswith('รุ่น'):
+            parts.append(age)
+        elif age.startswith('อายุ'):
+            parts.append(f'รุ่น{age}')
+        elif age == 'ทั่วไป':
+            parts.append('รุ่นทั่วไป')
+        else:
+            parts.append(f'รุ่น{age}')
+    return ' '.join(parts).strip()
+
+def event_member_count_label(e):
+    if is_certificate_only_event(e):
+        n=int(row_value(e, 'fixed_member_count', 0) or row_value(e, 'team_size', 0) or 0)
+        return f'{n} คน' if n > 0 else 'กำหนดเอง'
+    if e['category_type']=='single': return '1 คน'
+    if e['category_type']=='pair' and e['gender_type']=='mixed': return '2 คน'
+    if e['category_type']=='pair': return '2–3 คน'
+    return '3–4 คน'
 
 def award_label(v, custom=None):
     labels={
@@ -167,16 +278,33 @@ def award_label(v, custom=None):
 
 def event_display_name(e):
     custom=(e['event_name'] or '').strip()
-    return custom or f"{category_label(e['category_type'])} {gender_label(e['gender_type'])} {age_label(e['age_group'])}"
+    if custom:
+        return custom
+    base=f"{category_label(e['category_type'])} {gender_label(e['gender_type'])} {age_label(e['age_group'])}"
+    if str(row_value(e, 'sport_name', '') or '').strip():
+        return f"{sport_competition_label(e)} {base}"
+    return base
 
-def allowed_member_counts(category, gender_type=None):
+def allowed_member_counts(category, gender_type=None, fixed_member_count=None):
+    try:
+        fixed=int(fixed_member_count or 0)
+    except (TypeError, ValueError):
+        fixed=0
+    if fixed > 0:
+        return [fixed]
     if category=='single':
         return [1]
     if category=='pair':
         return [2] if gender_type=='mixed' else [2,3]
     return [3,4]
 
-def suggested_member_count(category, gender_type=None): return max(allowed_member_counts(category, gender_type))
+def suggested_member_count(category, gender_type=None, fixed_member_count=None): return max(allowed_member_counts(category, gender_type, fixed_member_count))
+
+def event_allowed_member_counts(e):
+    return allowed_member_counts(e['category_type'], e['gender_type'], row_value(e, 'fixed_member_count', 0) if is_certificate_only_event(e) else None)
+
+def event_suggested_member_count(e):
+    return max(event_allowed_member_counts(e))
 
 def registration_is_complete(member_count, members):
     try: expected=int(member_count or 0)
@@ -252,7 +380,7 @@ def get_owned_event(conn,event_id):
     return conn.execute('''SELECT e.*,t.title tournament_title,t.created_by,t.certificates_enabled,t.certificate_self_download,t.certificate_require_approval,t.cert_org,t.cert_date,t.cert_place,t.cert_signer,t.cert_signer_position,t.cert_style,t.cert_heading,t.cert_footer_note,t.cert_logo_1,t.cert_logo_2,t.cert_logo_3,t.cert_background,t.cert_signature,t.cert_stamp FROM events e JOIN tournaments t ON e.tournament_id=t.id WHERE e.id=?''',(event_id,)).fetchone()
 
 @app.context_processor
-def helpers(): return dict(category_label=category_label,gender_label=gender_label,age_label=age_label,fee_per_label=fee_per_label,award_label=award_label,event_display_name=event_display_name,allowed_member_counts=allowed_member_counts)
+def helpers(): return dict(category_label=category_label,gender_label=gender_label,age_label=age_label,fee_per_label=fee_per_label,award_label=award_label,event_display_name=event_display_name,allowed_member_counts=allowed_member_counts,event_allowed_member_counts=event_allowed_member_counts,event_suggested_member_count=event_suggested_member_count,event_mode_label=event_mode_label,event_member_count_label=event_member_count_label,sport_competition_label=sport_competition_label,cert_category_line=cert_category_line,cert_issue_date=format_cert_issue_date,is_certificate_only_event=is_certificate_only_event)
 
 @app.route('/uploads/<path:filename>')
 def uploaded_file(filename): return send_from_directory(UPLOAD_FOLDER,filename)
@@ -279,7 +407,7 @@ def public_tournament_registrations(tournament_id):
     if selected_event_id:
         selected_event=next((e for e in events if e['id']==selected_event_id),None)
         if not selected_event: selected_event_id=None
-    query='SELECT r.id,r.event_id,r.team_name,r.affiliation,r.member_count,r.is_complete,r.is_waitlist,r.created_at,e.event_name,e.category_type,e.gender_type,e.age_group FROM registrations r JOIN events e ON r.event_id=e.id WHERE e.tournament_id=?'
+    query='SELECT r.id,r.event_id,r.team_name,r.affiliation,r.member_count,r.is_complete,r.is_waitlist,r.created_at,e.event_name,e.category_type,e.gender_type,e.age_group,e.event_mode,e.sport_name,e.fixed_member_count FROM registrations r JOIN events e ON r.event_id=e.id WHERE e.tournament_id=?'
     args=[tournament_id]
     if selected_event_id:
         query += ' AND e.id=?'; args.append(selected_event_id)
@@ -296,45 +424,66 @@ def register_event(event_id):
     conn=get_db(); event=conn.execute('SELECT * FROM events WHERE id=?',(event_id,)).fetchone()
     if not event: conn.close(); flash('ไม่พบอีเวนต์'); return redirect(url_for('home'))
     tournament=conn.execute('SELECT * FROM tournaments WHERE id=?',(event['tournament_id'],)).fetchone(); conn.close()
+    cert_only=is_certificate_only_event(event)
+    fixed_count=int(row_value(event,'fixed_member_count',0) or row_value(event,'team_size',0) or 0) if cert_only else 0
+    allowed_counts=allowed_member_counts(event['category_type'], event['gender_type'], fixed_count if cert_only else None)
+    default_member_count=suggested_member_count(event['category_type'], event['gender_type'], fixed_count if cert_only else None)
     reg_count=event_reg_count(event_id); full, can_waitlist=registration_capacity_state(event)
     if request.method=='POST':
         if not event['is_open'] or not tournament['is_open']: flash('อีเวนต์นี้ปิดรับสมัครแล้ว'); return redirect(url_for('register_event',event_id=event_id))
         if full and not can_waitlist: flash('อีเวนต์นี้เต็มแล้ว'); return redirect(url_for('register_event',event_id=event_id))
-        member_count=int(request.form.get('member_count',suggested_member_count(event['category_type'], event['gender_type'])))
-        if member_count not in allowed_member_counts(event['category_type'], event['gender_type']): flash('จำนวนผู้เล่นไม่ตรงตามประเภทการแข่งขัน'); return redirect(url_for('register_event',event_id=event_id))
-        team_name=request.form.get('team_name','').strip(); affiliation=request.form.get('affiliation','').strip(); contact=request.form.get('contact_name','').strip(); phone=request.form.get('phone','').strip(); notes=request.form.get('notes','').strip()
-        if not contact or not phone: flash('กรุณากรอกชื่อผู้ติดต่อและเบอร์โทร'); return redirect(url_for('register_event',event_id=event_id))
-        if event['category_type']=='team' and not team_name: flash('ประเภททีมต้องกรอกชื่อทีม'); return redirect(url_for('register_event',event_id=event_id))
+        member_count=parse_int(request.form.get('member_count',default_member_count),default_member_count,1,99)
+        if member_count not in allowed_counts: flash('จำนวนผู้เล่นไม่ตรงตามที่แอดมินกำหนด'); return redirect(url_for('register_event',event_id=event_id))
+        team_name=request.form.get('team_name','').strip()
+        affiliation=request.form.get('affiliation','').strip()
+        coach_name=request.form.get('coach_name','').strip()
+        contact=request.form.get('contact_name','').strip()
+        phone=request.form.get('phone','').strip()
+        notes=request.form.get('notes','').strip()
+        if cert_only:
+            if not team_name: flash('กรุณากรอกชื่อทีม'); return redirect(url_for('register_event',event_id=event_id))
+            if not coach_name: flash('กรุณากรอกชื่อผู้ฝึกสอน'); return redirect(url_for('register_event',event_id=event_id))
+            contact=contact or coach_name
+        else:
+            if not contact or not phone: flash('กรุณากรอกชื่อผู้ติดต่อและเบอร์โทร'); return redirect(url_for('register_event',event_id=event_id))
+            if event['category_type']=='team' and not team_name: flash('ประเภททีมต้องกรอกชื่อทีม'); return redirect(url_for('register_event',event_id=event_id))
         members=[]
         for i in range(1,member_count+1):
-            n=request.form.get(f'member_name_{i}','').strip(); idc=request.form.get(f'member_idcard_{i}','').strip(); f=request.files.get(f'idcard_file_{i}'); fn=None
-            if not n: flash(f'กรุณากรอกชื่อสมาชิกคนที่ {i}'); return redirect(url_for('register_event',event_id=event_id))
+            n=request.form.get(f'member_name_{i}','').strip()
+            idc='' if cert_only else request.form.get(f'member_idcard_{i}','').strip()
+            f=None if cert_only else request.files.get(f'idcard_file_{i}')
+            fn=None
+            if not n: flash(f'กรุณากรอกชื่อนักกีฬาคนที่ {i}'); return redirect(url_for('register_event',event_id=event_id))
             if f and f.filename:
                 fn=save_uploaded_file(f,f'idcard_{i}')
                 if not fn: flash('ไฟล์บัตรประชาชนต้องเป็น JPG PNG WEBP หรือ PDF'); return redirect(url_for('register_event',event_id=event_id))
             members.append((n,idc,fn))
-        slip=None; sf=request.files.get('slip_file')
+        slip=None; sf=None if cert_only else request.files.get('slip_file')
         if sf and sf.filename:
             slip=save_uploaded_file(sf,'slip')
             if not slip: flash('ไฟล์สลิปต้องเป็น JPG PNG WEBP หรือ PDF'); return redirect(url_for('register_event',event_id=event_id))
-        if event['has_fee'] and event['require_slip'] and not slip: flash('กรุณาแนบหลักฐานการชำระเงิน'); return redirect(url_for('register_event',event_id=event_id))
+        if (not cert_only) and event['has_fee'] and event['require_slip'] and not slip: flash('กรุณาแนบหลักฐานการชำระเงิน'); return redirect(url_for('register_event',event_id=event_id))
         conn=get_db(); code=unique_registration_code(conn); wait=1 if full and can_waitlist else 0
-        rid=insert_returning_id(conn,'''INSERT INTO registrations(event_id,team_name,affiliation,contact_name,phone,slip_filename,notes,created_at,member_count,source,registration_code,status,is_waitlist) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',(event_id,team_name or None,affiliation or None,contact,phone,slip,notes,now(),member_count,'web',code,'pending',wait)); c=conn.cursor()
+        status='approved' if cert_only else 'pending'
+        source='certificate_only' if cert_only else 'web'
+        complete=registration_is_complete(member_count,[{'name':m[0]} for m in members])
+        rid=insert_returning_id(conn,'''INSERT INTO registrations(event_id,team_name,affiliation,contact_name,phone,slip_filename,notes,created_at,member_count,source,registration_code,status,is_waitlist,is_complete,coach_name,approved_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(event_id,team_name or None,affiliation or None,contact,phone,slip,notes,now(),member_count,source,code,status,wait,complete,coach_name or None,now() if cert_only else None)); c=conn.cursor()
         for m in members: c.execute('INSERT INTO registration_members(registration_id,member_name,member_idcard,idcard_file) VALUES(?,?,?,?)',(rid,*m))
         conn.commit(); conn.close(); return redirect(url_for('registration_status',code=code))
-    return render_template('register_event.html',event=event,tournament=tournament,reg_count=reg_count,full=full,can_waitlist=can_waitlist,default_member_count=suggested_member_count(event['category_type'], event['gender_type']))
+    return render_template('register_event.html',event=event,tournament=tournament,reg_count=reg_count,full=full,can_waitlist=can_waitlist,default_member_count=default_member_count,allowed_counts=allowed_counts,cert_only=cert_only)
 
 @app.route('/registration/<code>')
 def registration_status(code):
-    conn=get_db(); reg=conn.execute('''SELECT r.*,e.event_name,e.category_type,e.gender_type,e.age_group,e.has_fee,e.fee,e.fee_per,t.title tournament_title,t.certificates_enabled,t.certificate_self_download,t.certificate_require_approval FROM registrations r JOIN events e ON r.event_id=e.id JOIN tournaments t ON e.tournament_id=t.id WHERE r.registration_code=?''',(code,)).fetchone()
+    conn=get_db(); reg=conn.execute('''SELECT r.*,e.event_name,e.category_type,e.gender_type,e.age_group,e.has_fee,e.fee,e.fee_per,e.event_mode,e.sport_name,e.fixed_member_count,t.title tournament_title,t.certificates_enabled,t.certificate_self_download,t.certificate_require_approval FROM registrations r JOIN events e ON r.event_id=e.id JOIN tournaments t ON e.tournament_id=t.id WHERE r.registration_code=?''',(code,)).fetchone()
     if not reg: conn.close(); abort(404)
     members=conn.execute('SELECT * FROM registration_members WHERE registration_id=? ORDER BY id',(reg['id'],)).fetchall(); conn.close()
-    cert_ready=bool(reg['is_complete'] and reg['certificates_enabled'] and reg['certificate_self_download'] and (not reg['certificate_require_approval'] or reg['status']=='approved'))
-    return render_template('registration_status.html',reg=reg,members=members,cert_ready=cert_ready)
+    instant=is_certificate_only_event(reg)
+    cert_ready=bool(reg['is_complete'] and reg['certificates_enabled'] and reg['certificate_self_download'] and (instant or not reg['certificate_require_approval'] or reg['status']=='approved'))
+    return render_template('registration_status.html',reg=reg,members=members,cert_ready=cert_ready,cert_only=instant)
 
 @app.route('/certificate-search')
 def certificate_search():
-    """Public self-service certificate search by athlete name."""
+    """Public self-service certificate search by athlete or coach name."""
     query=(request.args.get('q') or '').strip()
     results=[]
     searched=False
@@ -345,14 +494,23 @@ def certificate_search():
         else:
             conn=get_db()
             like=f'%{query}%'
-            results=conn.execute('''SELECT m.id member_id,m.member_name,r.id registration_id,r.team_name,r.affiliation,r.status,r.is_waitlist,r.is_complete,r.award_result,r.award_custom,
-                e.event_name,e.category_type,e.gender_type,e.age_group,t.title tournament_title,t.certificates_enabled,t.certificate_self_download,t.certificate_require_approval
+            results=conn.execute('''
+                SELECT m.id member_id,m.member_name,'athlete' AS person_type,r.id registration_id,r.team_name,r.affiliation,r.coach_name,r.status,r.is_waitlist,r.is_complete,r.award_result,r.award_custom,
+                e.event_name,e.category_type,e.gender_type,e.age_group,e.event_mode,e.sport_name,e.fixed_member_count,t.title tournament_title,t.certificates_enabled,t.certificate_self_download,t.certificate_require_approval
                 FROM registration_members m
                 JOIN registrations r ON m.registration_id=r.id
                 JOIN events e ON r.event_id=e.id
                 JOIN tournaments t ON e.tournament_id=t.id
                 WHERE m.member_name LIKE ?
-                ORDER BY t.id DESC,e.id,r.id,m.id''',(like,)).fetchall()
+                UNION ALL
+                SELECT NULL AS member_id,r.coach_name AS member_name,'coach' AS person_type,r.id registration_id,r.team_name,r.affiliation,r.coach_name,r.status,r.is_waitlist,r.is_complete,r.award_result,r.award_custom,
+                e.event_name,e.category_type,e.gender_type,e.age_group,e.event_mode,e.sport_name,e.fixed_member_count,t.title tournament_title,t.certificates_enabled,t.certificate_self_download,t.certificate_require_approval
+                FROM registrations r
+                JOIN events e ON r.event_id=e.id
+                JOIN tournaments t ON e.tournament_id=t.id
+                WHERE r.coach_name IS NOT NULL AND r.coach_name <> '' AND r.coach_name LIKE ?
+                ORDER BY tournament_title DESC,event_name,registration_id,person_type
+            ''',(like,like)).fetchall()
             conn.close()
     return render_template('certificate_search.html',query=query,results=results,searched=searched)
 
@@ -406,10 +564,47 @@ def manage_events(tournament_id):
     return render_template('manage_events.html',tournament=t,events=events,counts=counts,waitcounts=waitcounts,total_regs=total)
 
 
+def parse_int(value, default=0, min_value=None, max_value=None):
+    try:
+        n=int(value)
+    except (TypeError, ValueError):
+        n=default
+    if min_value is not None: n=max(min_value,n)
+    if max_value is not None: n=min(max_value,n)
+    return n
+
 def parse_event_form():
-    category=request.form.get('category_type','single'); gender=request.form.get('gender_type','open'); has_fee=1 if request.form.get('has_fee') else 0; has_limit=1 if request.form.get('has_limit') else 0
-    fee=int(request.form.get('fee','0') or 0) if has_fee else 0; max_slots=int(request.form.get('max_slots','0') or 0) if has_limit else 0
-    return dict(event_name=request.form.get('event_name','').strip(),category_type=category,gender_type=gender,age_group=request.form.get('age_group','general').strip(),team_size=suggested_member_count(category, gender),has_fee=has_fee,fee=fee,fee_per=request.form.get('fee_per','team'),require_slip=1 if has_fee and request.form.get('require_slip') else 0,has_limit=has_limit,max_slots=max_slots,waitlist_enabled=1 if has_limit and request.form.get('waitlist_enabled') else 0,waitlist_limit=int(request.form.get('waitlist_limit','0') or 0),is_open=1 if request.form.get('is_open') else 0)
+    event_mode=request.form.get('event_mode','competition')
+    if event_mode not in {'competition','certificate_only'}:
+        event_mode='competition'
+    category=request.form.get('category_type','single')
+    gender=request.form.get('gender_type','open')
+    sport_name=request.form.get('sport_name','').strip()
+    fixed_member_count=parse_int(request.form.get('fixed_member_count','0'),0,0,99) if event_mode=='certificate_only' else 0
+    has_fee=1 if request.form.get('has_fee') else 0
+    has_limit=1 if request.form.get('has_limit') else 0
+    fee=parse_int(request.form.get('fee','0'),0,0) if has_fee else 0
+    max_slots=parse_int(request.form.get('max_slots','0'),0,0) if has_limit else 0
+    team_size=fixed_member_count if fixed_member_count > 0 else suggested_member_count(category, gender)
+    return dict(
+        event_name=request.form.get('event_name','').strip(),
+        category_type=category,
+        gender_type=gender,
+        age_group=request.form.get('age_group','general').strip(),
+        team_size=team_size,
+        has_fee=has_fee,
+        fee=fee,
+        fee_per=request.form.get('fee_per','team'),
+        require_slip=1 if has_fee and request.form.get('require_slip') else 0,
+        has_limit=has_limit,
+        max_slots=max_slots,
+        waitlist_enabled=1 if has_limit and request.form.get('waitlist_enabled') else 0,
+        waitlist_limit=parse_int(request.form.get('waitlist_limit','0'),0,0),
+        is_open=1 if request.form.get('is_open') else 0,
+        event_mode=event_mode,
+        sport_name=sport_name,
+        fixed_member_count=fixed_member_count
+    )
 
 @app.route('/admin/tournament/<int:tournament_id>/event/create',methods=['GET','POST'])
 def create_event(tournament_id):
@@ -443,7 +638,7 @@ def tournament_registrations(tournament_id):
         if not selected_event: selected_event_id=None
     status_filter=request.args.get('status_filter','pending')
     if status_filter not in {'pending','approved'}: status_filter='pending'
-    base_query='''SELECT r.*,e.event_name,e.category_type,e.gender_type,e.age_group,e.fee,e.has_fee,e.fee_per FROM registrations r JOIN events e ON r.event_id=e.id WHERE e.tournament_id=?'''
+    base_query='''SELECT r.*,e.event_name,e.category_type,e.gender_type,e.age_group,e.event_mode,e.sport_name,e.fixed_member_count,e.fee,e.has_fee,e.fee_per FROM registrations r JOIN events e ON r.event_id=e.id WHERE e.tournament_id=?'''
     base_args=[tournament_id]
     if selected_event_id:
         base_query += ' AND e.id=?'; base_args.append(selected_event_id)
@@ -488,7 +683,7 @@ def approve_registration(registration_id):
 def edit_registration(registration_id):
     if not is_logged_in(): return redirect(url_for('login'))
     conn=get_db()
-    reg=conn.execute('''SELECT r.*,e.tournament_id,t.created_by FROM registrations r JOIN events e ON r.event_id=e.id JOIN tournaments t ON e.tournament_id=t.id WHERE r.id=?''',(registration_id,)).fetchone()
+    reg=conn.execute('''SELECT r.*,e.tournament_id,e.event_mode,e.sport_name,e.fixed_member_count,t.created_by FROM registrations r JOIN events e ON r.event_id=e.id JOIN tournaments t ON e.tournament_id=t.id WHERE r.id=?''',(registration_id,)).fetchone()
     if not reg or reg['created_by']!=session['user_id']:
         conn.close(); return redirect(url_for('admin_dashboard'))
     events=conn.execute('SELECT * FROM events WHERE tournament_id=? ORDER BY age_group,category_type,gender_type,id',(reg['tournament_id'],)).fetchall()
@@ -500,14 +695,21 @@ def edit_registration(registration_id):
             conn.close(); flash('ไม่พบอีเวนต์ที่เลือก'); return redirect(request.url)
         try: member_count=int(request.form.get('member_count','0'))
         except ValueError: member_count=0
-        if member_count not in allowed_member_counts(event['category_type'],event['gender_type']):
+        if member_count not in allowed_member_counts(event['category_type'],event['gender_type'], event['fixed_member_count'] if is_certificate_only_event(event) else None):
             conn.close(); flash('จำนวนผู้เล่นไม่ตรงตามประเภทการแข่งขัน'); return redirect(request.url)
-        team_name=request.form.get('team_name','').strip(); affiliation=request.form.get('affiliation','').strip()
+        team_name=request.form.get('team_name','').strip(); affiliation=request.form.get('affiliation','').strip(); coach_name=request.form.get('coach_name','').strip()
         contact=request.form.get('contact_name','').strip(); phone=request.form.get('phone','').strip(); notes=request.form.get('notes','').strip()
-        if event['category_type']=='team' and not team_name:
-            conn.close(); flash('ประเภททีมต้องกรอกชื่อทีม'); return redirect(request.url)
-        if not contact or not phone:
-            conn.close(); flash('กรุณากรอกชื่อผู้ติดต่อและเบอร์โทร'); return redirect(request.url)
+        if is_certificate_only_event(event):
+            if not team_name:
+                conn.close(); flash('กรุณากรอกชื่อทีม'); return redirect(request.url)
+            if not coach_name:
+                conn.close(); flash('กรุณากรอกชื่อผู้ฝึกสอน'); return redirect(request.url)
+            contact=contact or coach_name
+        else:
+            if event['category_type']=='team' and not team_name:
+                conn.close(); flash('ประเภททีมต้องกรอกชื่อทีม'); return redirect(request.url)
+            if not contact or not phone:
+                conn.close(); flash('กรุณากรอกชื่อผู้ติดต่อและเบอร์โทร'); return redirect(request.url)
         old_files={m['id']:m['idcard_file'] for m in members if m['idcard_file']}
         kept_files=set(); updated_members=[]
         for i in range(1,member_count+1):
@@ -535,12 +737,13 @@ def edit_registration(registration_id):
         is_waitlist=1 if request.form.get('is_waitlist') else 0
         conn.execute('DELETE FROM certificates WHERE registration_id=?',(registration_id,))
         conn.execute('DELETE FROM registration_members WHERE registration_id=?',(registration_id,))
-        conn.execute('''UPDATE registrations SET event_id=?,team_name=?,affiliation=?,contact_name=?,phone=?,notes=?,member_count=?,status=?,approved_at=?,is_waitlist=?,is_complete=? WHERE id=?''',(event_id,team_name or None,affiliation or None,contact,phone,notes,member_count,status,now() if status=='approved' else None,is_waitlist,is_complete,registration_id))
+        conn.execute('''UPDATE registrations SET event_id=?,team_name=?,affiliation=?,contact_name=?,phone=?,notes=?,member_count=?,status=?,approved_at=?,is_waitlist=?,is_complete=?,coach_name=? WHERE id=?''',(event_id,team_name or None,affiliation or None,contact,phone,notes,member_count,status,now() if status=='approved' else None,is_waitlist,is_complete,coach_name or None,registration_id))
         for m in updated_members: conn.execute('INSERT INTO registration_members(registration_id,member_name,member_idcard,idcard_file) VALUES(?,?,?,?)',(registration_id,*m))
         conn.commit(); conn.close(); flash('แก้ไขข้อมูลผู้สมัครเรียบร้อยแล้ว' + ('' if is_complete else ' — รายชื่อนักกีฬายังไม่ครบ สามารถกลับมาแก้เพิ่มได้'))
         return redirect(url_for('tournament_registrations',tournament_id=reg['tournament_id'],event_id=event_id))
+    max_slots=max([len(members), reg['member_count'] or 1] + [max(allowed_member_counts(e['category_type'], e['gender_type'], e['fixed_member_count'] if is_certificate_only_event(e) else None)) for e in events])
     member_slots=[]
-    for i in range(4): member_slots.append(members[i] if i<len(members) else None)
+    for i in range(max_slots): member_slots.append(members[i] if i<len(members) else None)
     conn.close()
     return render_template('edit_registration.html',reg=reg,events=events,member_slots=member_slots)
 
@@ -564,7 +767,7 @@ def registration_template(event_id):
     if not is_logged_in(): return redirect(url_for('login'))
     conn=get_db(); e=get_owned_event(conn,event_id); conn.close()
     if not e or e['created_by']!=session['user_id']: abort(404)
-    wb=openpyxl.Workbook(); ws=wb.active; ws.title='รายชื่อสมัคร'; headers=['ชื่อทีม','ต้นสังกัด','ผู้ติดต่อ','เบอร์โทร','จำนวนผู้เล่น','สมาชิก 1','เลขบัตร 1','สมาชิก 2','เลขบัตร 2','สมาชิก 3','เลขบัตร 3','สมาชิก 4','เลขบัตร 4','หมายเหตุ']; ws.append(headers); ws.append(['ตัวอย่างทีม A','โรงเรียน/ชมรม','นายผู้ติดต่อ','0812345678',suggested_member_count(e['category_type'], e['gender_type']),'ชื่อสมาชิก 1','','ชื่อสมาชิก 2','','ชื่อสมาชิก 3','','ชื่อสมาชิก 4','',''])
+    wb=openpyxl.Workbook(); ws=wb.active; ws.title='รายชื่อสมัคร'; headers=['ชื่อทีม','ต้นสังกัด','ผู้ติดต่อ','เบอร์โทร','จำนวนผู้เล่น','สมาชิก 1','เลขบัตร 1','สมาชิก 2','เลขบัตร 2','สมาชิก 3','เลขบัตร 3','สมาชิก 4','เลขบัตร 4','หมายเหตุ']; ws.append(headers); ws.append(['ตัวอย่างทีม A','โรงเรียน/ชมรม','นายผู้ติดต่อ','0812345678',event_suggested_member_count(e),'ชื่อสมาชิก 1','','ชื่อสมาชิก 2','','ชื่อสมาชิก 3','','ชื่อสมาชิก 4','',''])
     style_ws(ws); return excel_response(wb,f'event_{event_id}_registration_template.xlsx')
 
 @app.route('/admin/event/<int:event_id>/import',methods=['GET','POST'])
@@ -582,7 +785,7 @@ def import_registrations(event_id):
             vals=list(row)+['']*14; team,aff,contact,phone,count= [str(vals[i] or '').strip() for i in range(5)]
             try: count=int(float(count))
             except: errors.append(f'แถว {rowno}: จำนวนผู้เล่นไม่ถูกต้อง'); continue
-            if count not in allowed_member_counts(e['category_type'], e['gender_type']): errors.append(f'แถว {rowno}: จำนวนผู้เล่นไม่ตรงประเภท {category_label(e["category_type"])}'); continue
+            if count not in event_allowed_member_counts(e): errors.append(f'แถว {rowno}: จำนวนผู้เล่นไม่ตรงประเภท {category_label(e["category_type"])}'); continue
             members=[]
             for i in range(4):
                 name=str(vals[5+i*2] or '').strip(); idc=str(vals[6+i*2] or '').strip()
@@ -605,13 +808,13 @@ def build_bulk_registration_workbook(events):
     headers=['รหัสอีเวนต์','ชื่ออีเวนต์','ชื่อทีม','ต้นสังกัด','ผู้ติดต่อ','เบอร์โทร','จำนวนผู้เล่น','สมาชิก 1','เลขบัตร 1','สมาชิก 2','เลขบัตร 2','สมาชิก 3','เลขบัตร 3','สมาชิก 4','เลขบัตร 4','หมายเหตุ']
     ws.append(headers)
     for e in events:
-        ws.append([e['id'],event_display_name(e),'','','','',suggested_member_count(e['category_type'], e['gender_type']),'','','','','','','','',''])
+        ws.append([e['id'],event_display_name(e),'','','','',event_suggested_member_count(e),'','','','','','','','',''])
     for _ in range(max(50, len(events)*3)):
         ws.append(['','','','','','','','','','','','','','','',''])
     ref=wb.create_sheet('รายการอีเวนต์')
     ref.append(['รหัสอีเวนต์','ชื่ออีเวนต์','ประเภท','เพศ','รุ่น','จำนวนผู้เล่นที่รับได้'])
     for e in events:
-        ref.append([e['id'],event_display_name(e),category_label(e['category_type']),gender_label(e['gender_type']),age_label(e['age_group']),','.join(str(n) for n in allowed_member_counts(e['category_type'], e['gender_type']))])
+        ref.append([e['id'],event_display_name(e),category_label(e['category_type']),gender_label(e['gender_type']),age_label(e['age_group']),','.join(str(n) for n in event_allowed_member_counts(e))])
     guide=wb.create_sheet('วิธีใช้')
     guide.append(['วิธีกรอกรายชื่อสมัครรวมทุกอีเวนต์'])
     guide.append(['1. กรอกข้อมูลในชีต “รายชื่อสมัครรวม” เพียงชีตเดียว'])
@@ -690,8 +893,8 @@ def import_registrations_all(tournament_id):
             team=str(vals[2] or '').strip(); aff=str(vals[3] or '').strip(); contact=str(vals[4] or '').strip(); phone=str(vals[5] or '').strip(); count=_int_from_excel(vals[6])
             if count is None:
                 errors.append(f'แถว {rowno}: จำนวนผู้เล่นไม่ถูกต้อง'); continue
-            if count not in allowed_member_counts(e['category_type'], e['gender_type']):
-                allowed='/'.join(str(n) for n in allowed_member_counts(e['category_type'], e['gender_type']))
+            if count not in event_allowed_member_counts(e):
+                allowed='/'.join(str(n) for n in event_allowed_member_counts(e))
                 errors.append(f'แถว {rowno}: {event_display_name(e)} รับผู้เล่น {allowed} คน'); continue
             if e['category_type']=='team' and not team:
                 errors.append(f'แถว {rowno}: ประเภททีมต้องกรอกชื่อทีม'); continue
@@ -771,8 +974,8 @@ def _parse_public_bulk_sheet(events,ws,default_contact='',default_phone=''):
         count=_int_from_excel(vals[6])
         if count is None:
             errors.append(f'แถว {rowno}: จำนวนผู้เล่นไม่ถูกต้อง'); continue
-        if count not in allowed_member_counts(e['category_type'],e['gender_type']):
-            allowed='/'.join(str(n) for n in allowed_member_counts(e['category_type'],e['gender_type']))
+        if count not in event_allowed_member_counts(e):
+            allowed='/'.join(str(n) for n in event_allowed_member_counts(e))
             errors.append(f'แถว {rowno}: {event_display_name(e)} รับผู้เล่น {allowed} คน'); continue
         if e['category_type']=='team' and not team:
             errors.append(f'แถว {rowno}: ประเภททีมต้องกรอกชื่อทีม'); continue
@@ -867,7 +1070,21 @@ def event_template(tournament_id):
     if not is_logged_in(): return redirect(url_for('login'))
     conn=get_db(); t=get_owned_tournament(conn,tournament_id); conn.close()
     if not t: abort(404)
-    wb=openpyxl.Workbook(); ws=wb.active; ws.title='อีเวนต์'; ws.append(['ชื่ออีเวนต์','ประเภท','เพศ','รุ่น','เปิดรับสมัคร','มีค่าสมัคร','ค่าสมัคร','คิดราคาต่อ','ต้องแนบสลิป','จำกัดจำนวน','จำนวนสูงสุด','เปิดสำรอง','จำนวนสำรองสูงสุด']); ws.append(['คู่ชายทั่วไป','คู่','ชาย','ทั่วไป','ใช่','ใช่',100,'ทีม','ไม่','ใช่',24,'ใช่',5]); style_ws(ws); return excel_response(wb,f'tournament_{tournament_id}_event_template.xlsx')
+    wb=openpyxl.Workbook(); ws=wb.active; ws.title='อีเวนต์'
+    ws.append(['รูปแบบอีเวนต์','ชื่ออีเวนต์','ชนิดกีฬา','ประเภท','เพศ','รุ่น','จำนวนนักกีฬาในเกียรติบัตร','เปิดรับสมัคร','มีค่าสมัคร','ค่าสมัคร','คิดราคาต่อ','ต้องแนบสลิป','จำกัดจำนวน','จำนวนสูงสุด','เปิดสำรอง','จำนวนสำรองสูงสุด'])
+    ws.append(['ออกเกียรติบัตรอย่างเดียว','ฟุตบอลชาย รุ่นอายุไม่เกิน 14 ปี','ฟุตบอล','ทีม','ชาย','รุ่นอายุไม่เกิน 14 ปี',11,'ใช่','ไม่',0,'ทีม','ไม่','ไม่',0,'ไม่',0])
+    ws.append(['สมัครแข่งขันปกติ','คู่ชายทั่วไป','เปตอง','คู่','ชาย','ทั่วไป','','ใช่','ใช่',100,'ทีม','ไม่','ใช่',24,'ใช่',5])
+    guide=wb.create_sheet('วิธีใช้')
+    guide.append(['รูปแบบอีเวนต์: ใส่ “ออกเกียรติบัตรอย่างเดียว” เมื่อต้องการให้กรอกชื่อแล้วปริ้นเกียรติบัตรได้ทันที หรือ “สมัครแข่งขันปกติ” สำหรับรับสมัครแข่งขันแบบเดิม'])
+    guide.append(['โหมดเกียรติบัตรอย่างเดียว ต้องระบุชนิดกีฬา ประเภท เพศ รุ่น และจำนวนนักกีฬาในเกียรติบัตร'])
+    style_ws(ws); guide.column_dimensions['A'].width=120
+    return excel_response(wb,f'tournament_{tournament_id}_event_template.xlsx')
+
+def normalize_event_mode(v):
+    raw=str(v or '').strip().lower()
+    if raw in {'ออกเกียรติบัตรอย่างเดียว','เกียรติบัตร','certificate_only','certificate only','cert'}:
+        return 'certificate_only'
+    return 'competition'
 
 @app.route('/admin/tournament/<int:tournament_id>/event-import',methods=['GET','POST'])
 def import_events(tournament_id):
@@ -879,17 +1096,28 @@ def import_events(tournament_id):
         f=request.files.get('excel_file')
         if not f or not allowed_file(f.filename,EXCEL_EXTENSIONS): conn.close(); flash('กรุณาเลือกไฟล์ .xlsx'); return redirect(request.url)
         ws=openpyxl.load_workbook(f,data_only=True).active
+        header=[str(c.value or '').strip() for c in ws[1]]
+        new_format=bool(header and header[0]=='รูปแบบอีเวนต์')
         for rowno,row in enumerate(ws.iter_rows(min_row=2,values_only=True),start=2):
             if not any(v not in (None,'') for v in row): continue
-            v=list(row)+['']*13; cat=normalize_category(v[1])
+            if new_format:
+                v=list(row)+['']*16
+                event_mode=normalize_event_mode(v[0]); event_name=str(v[1] or '').strip(); sport_name=str(v[2] or '').strip(); cat=normalize_category(v[3]); gender=normalize_gender(v[4]); age=normalize_age(v[5]); fixed_count=parse_int(v[6] or 0,0,0,99) if event_mode=='certificate_only' else 0
+                open_value=v[7]; hasfee=truthy(v[8]); fee_value=v[9]; fee_per_value=v[10]; slip_value=v[11]; haslimit=truthy(v[12]); limit_value=v[13]; wait_value=v[14]; waitlimit_value=v[15]
+            else:
+                v=list(row)+['']*13
+                event_mode='competition'; event_name=str(v[0] or '').strip(); sport_name=''; cat=normalize_category(v[1]); gender=normalize_gender(v[2]); age=normalize_age(v[3]); fixed_count=0
+                open_value=v[4]; hasfee=truthy(v[5]); fee_value=v[6]; fee_per_value=v[7]; slip_value=v[8]; haslimit=truthy(v[9]); limit_value=v[10]; wait_value=v[11]; waitlimit_value=v[12]
             if not cat: errors.append(f'แถว {rowno}: ประเภทต้องเป็น เดี่ยว คู่ หรือ ทีม'); continue
-            hasfee=truthy(v[5]); haslimit=truthy(v[9])
-            try: fee=int(v[6] or 0); limit=int(v[10] or 0); waitlimit=int(v[12] or 0)
-            except: errors.append(f'แถว {rowno}: จำนวนเงินหรือจำนวนรับสมัครไม่ถูกต้อง'); continue
-            gender=normalize_gender(v[2])
-            conn.execute('''INSERT INTO events(tournament_id,event_name,category_type,gender_type,age_group,max_slots,fee,team_size,is_open,created_at,has_fee,fee_per,require_slip,has_limit,waitlist_enabled,waitlist_limit) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(tournament_id,str(v[0] or '').strip(),cat,gender,normalize_age(v[3]),limit if haslimit else 0,fee if hasfee else 0,suggested_member_count(cat,gender),1 if truthy(v[4]) else 0,now(),1 if hasfee else 0,'person' if str(v[7] or '').strip() in {'คน','person'} else 'team',1 if truthy(v[8]) else 0,1 if haslimit else 0,1 if truthy(v[11]) else 0,waitlimit)); imported+=1
+            try:
+                fee=parse_int(fee_value or 0,0,0); limit=parse_int(limit_value or 0,0,0); waitlimit=parse_int(waitlimit_value or 0,0,0)
+            except Exception:
+                errors.append(f'แถว {rowno}: จำนวนเงินหรือจำนวนรับสมัครไม่ถูกต้อง'); continue
+            team_size=fixed_count if fixed_count > 0 else suggested_member_count(cat,gender)
+            conn.execute('''INSERT INTO events(tournament_id,event_name,category_type,gender_type,age_group,max_slots,fee,team_size,is_open,created_at,has_fee,fee_per,require_slip,has_limit,waitlist_enabled,waitlist_limit,event_mode,sport_name,fixed_member_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(tournament_id,event_name,cat,gender,age,limit if haslimit else 0,fee if hasfee else 0,team_size,1 if truthy(open_value) else 0,now(),1 if hasfee else 0,'person' if str(fee_per_value or '').strip() in {'คน','person'} else 'team',1 if hasfee and truthy(slip_value) else 0,1 if haslimit else 0,1 if haslimit and truthy(wait_value) else 0,waitlimit,event_mode,sport_name,fixed_count)); imported+=1
         conn.execute('INSERT INTO import_logs(tournament_id,import_type,filename,imported_count,error_count,created_at) VALUES(?,?,?,?,?,?)',(tournament_id,'events',secure_filename(f.filename),imported,len(errors),now())); conn.commit(); conn.close(); return render_template('import_result.html',title='ผลนำเข้าอีเวนต์',imported=imported,errors=errors,back_url=url_for('manage_events',tournament_id=tournament_id))
     conn.close(); return render_template('import_excel.html',title='นำเข้าอีเวนต์จาก Excel',description=f'งานแข่งขัน: {t["title"]}',template_url=url_for('event_template',tournament_id=tournament_id))
+
 
 @app.route('/admin/tournament/<int:tournament_id>/certificate-settings',methods=['GET','POST'])
 def certificate_settings(tournament_id):
@@ -917,9 +1145,11 @@ def certificate_settings(tournament_id):
                 delete_uploaded_file(current); current=None
             f=request.files.get(field)
             if f and f.filename:
+                if field == 'cert_background' and not allowed_file(f.filename, {'png'}):
+                    conn.close(); flash('เทมเพลตพื้นหลังเกียรติบัตรต้องเป็นไฟล์ PNG เท่านั้น'); return redirect(request.url)
                 saved=save_certificate_asset(f,field)
                 if not saved:
-                    conn.close(); flash('ไฟล์โลโก้ พื้นหลัง ลายเซ็น และตราประทับ ต้องเป็น PNG JPG JPEG หรือ WEBP'); return redirect(request.url)
+                    conn.close(); flash('ไฟล์โลโก้ ลายเซ็น และตราประทับ ต้องเป็น PNG JPG JPEG หรือ WEBP'); return redirect(request.url)
                 delete_uploaded_file(current); current=saved
             values[field]=current
         sets=','.join([f'{key}=?' for key in values])
@@ -930,18 +1160,44 @@ def certificate_settings(tournament_id):
 @app.route('/admin/tournament/<int:tournament_id>/certificate-preview')
 def certificate_preview(tournament_id):
     if not is_logged_in(): return redirect(url_for('login'))
-    conn=get_db(); t=get_owned_tournament(conn,tournament_id); conn.close()
-    if not t: abort(404)
-    reg=dict(t)
-    reg.update({
-        'tournament_title':t['title'], 'event_name':'คู่ชาย รุ่นอายุไม่เกิน 14 ปี',
-        'category_type':'pair','gender_type':'male','age_group':'ไม่เกิน 14 ปี',
-        'affiliation':'โรงเรียนตัวอย่าง','award_result':'champion','award_custom':'',
-    })
-    return render_template('certificate.html',reg=reg,member={'member_name':'นายตัวอย่าง ผู้เข้าแข่งขัน'},verification_code=None,team_mode=False,preview_mode=True)
+    conn=get_db()
+    t=get_owned_tournament(conn,tournament_id)
+    if not t:
+        conn.close(); abort(404)
+
+    # ใช้อีเวนต์จริงของงานนี้ในการพรีวิว เพื่อให้ชนิดกีฬา/รุ่น/ประเภทตรงกับที่แอดมินตั้งค่า
+    event_id=request.args.get('event_id',type=int)
+    if event_id:
+        sample_event=conn.execute('SELECT * FROM events WHERE id=? AND tournament_id=?',(event_id,tournament_id)).fetchone()
+    else:
+        sample_event=conn.execute('SELECT * FROM events WHERE tournament_id=? ORDER BY id LIMIT 1',(tournament_id,)).fetchone()
+    conn.close()
+
+    if sample_event:
+        reg=dict(t)
+        reg.update(dict(sample_event))
+        reg.update({
+            'tournament_title':t['title'],
+            'affiliation':'โรงเรียนตัวอย่าง',
+            'coach_name':'นายผู้ฝึกสอน ตัวอย่าง',
+            'award_result':'champion',
+            'award_custom':'',
+            'team_name':'ทีมตัวอย่าง',
+        })
+    else:
+        reg=dict(t)
+        reg.update({
+            'tournament_title':t['title'], 'event_name':'ฟุตบอลชาย รุ่นอายุไม่เกิน 14 ปี',
+            'category_type':'team','gender_type':'male','age_group':'รุ่นอายุไม่เกิน 14 ปี',
+            'event_mode':'certificate_only','sport_name':'ฟุตบอล','fixed_member_count':11,
+            'affiliation':'โรงเรียนตัวอย่าง','coach_name':'นายผู้ฝึกสอน ตัวอย่าง','award_result':'champion','award_custom':'',
+            'team_name':'ทีมตัวอย่าง',
+        })
+    return render_template('certificate.html',reg=reg,member={'member_name':'นายตัวอย่าง ผู้เข้าแข่งขัน'},verification_code=None,team_mode=False,coach_mode=False,preview_mode=True)
 
 def cert_access(reg):
-    return bool(reg['certificates_enabled'] and (is_logged_in() or (reg['certificate_self_download'] and (not reg['certificate_require_approval'] or reg['status']=='approved'))))
+    instant=is_certificate_only_event(reg)
+    return bool(reg['certificates_enabled'] and (is_logged_in() or (reg['certificate_self_download'] and (instant or not reg['certificate_require_approval'] or reg['status']=='approved'))))
 
 def get_or_create_cert(conn,registration_id,member_id=None,ctype='individual'):
     if member_id is None:
@@ -952,7 +1208,7 @@ def get_or_create_cert(conn,registration_id,member_id=None,ctype='individual'):
     code='CERT-'+datetime.now().strftime('%y')+'-'+secrets.token_hex(4).upper(); conn.execute('INSERT INTO certificates(registration_id,member_id,certificate_type,verification_code,issued_at) VALUES(?,?,?,?,?)',(registration_id,member_id,ctype,code,now())); conn.commit(); return code
 
 def get_cert_data(registration_id,member_id=None,ctype='individual'):
-    conn=get_db(); reg=conn.execute('''SELECT r.*,e.event_name,e.category_type,e.gender_type,e.age_group,t.title tournament_title,t.certificates_enabled,t.certificate_self_download,t.certificate_require_approval,t.cert_org,t.cert_date,t.cert_place,t.cert_signer,t.cert_signer_position,t.cert_style,t.cert_heading,t.cert_footer_note,t.cert_logo_1,t.cert_logo_2,t.cert_logo_3,t.cert_background,t.cert_signature,t.cert_stamp FROM registrations r JOIN events e ON r.event_id=e.id JOIN tournaments t ON e.tournament_id=t.id WHERE r.id=?''',(registration_id,)).fetchone()
+    conn=get_db(); reg=conn.execute('''SELECT r.*,e.event_name,e.category_type,e.gender_type,e.age_group,e.event_mode,e.sport_name,e.fixed_member_count,t.title tournament_title,t.certificates_enabled,t.certificate_self_download,t.certificate_require_approval,t.cert_org,t.cert_date,t.cert_place,t.cert_signer,t.cert_signer_position,t.cert_style,t.cert_heading,t.cert_footer_note,t.cert_logo_1,t.cert_logo_2,t.cert_logo_3,t.cert_background,t.cert_signature,t.cert_stamp FROM registrations r JOIN events e ON r.event_id=e.id JOIN tournaments t ON e.tournament_id=t.id WHERE r.id=?''',(registration_id,)).fetchone()
     if not reg or not cert_access(reg) or not reg['is_complete']: conn.close(); abort(403)
     member=conn.execute('SELECT * FROM registration_members WHERE id=? AND registration_id=?',(member_id,registration_id)).fetchone() if member_id else None
     if member_id is not None and not member: conn.close(); abort(404)
@@ -960,10 +1216,20 @@ def get_cert_data(registration_id,member_id=None,ctype='individual'):
 
 @app.route('/certificate/<int:registration_id>/member/<int:member_id>')
 def certificate_member(registration_id,member_id):
-    reg,member,code=get_cert_data(registration_id,member_id,'individual'); return render_template('certificate.html',reg=reg,member=member,verification_code=code,team_mode=False)
+    reg,member,code=get_cert_data(registration_id,member_id,'individual')
+    return render_template('certificate.html',reg=reg,member=member,verification_code=code,team_mode=False,coach_mode=False)
+
 @app.route('/certificate/<int:registration_id>/team')
 def certificate_team(registration_id):
-    reg,member,code=get_cert_data(registration_id,None,'team'); return render_template('certificate.html',reg=reg,member=None,verification_code=code,team_mode=True)
+    reg,member,code=get_cert_data(registration_id,None,'team')
+    return render_template('certificate.html',reg=reg,member=None,verification_code=code,team_mode=True,coach_mode=False)
+
+@app.route('/certificate/<int:registration_id>/coach')
+def certificate_coach(registration_id):
+    reg,member,code=get_cert_data(registration_id,None,'coach')
+    if not (reg['coach_name'] or '').strip():
+        abort(404)
+    return render_template('certificate.html',reg=reg,member={'member_name':reg['coach_name']},verification_code=code,team_mode=False,coach_mode=True)
 
 @app.route('/admin/event/<int:event_id>/certificates/print')
 def print_event_certificates(event_id):
@@ -972,7 +1238,7 @@ def print_event_certificates(event_id):
     if not event or event['created_by']!=session['user_id']: conn.close(); abort(404)
     if not event['certificates_enabled']:
         conn.close(); flash('กรุณาเปิดใช้งานเกียรติบัตรก่อน'); return redirect(url_for('certificate_settings',tournament_id=event['tournament_id']))
-    regs=conn.execute('''SELECT r.*,e.event_name,e.category_type,e.gender_type,e.age_group,
+    regs=conn.execute('''SELECT r.*,e.event_name,e.category_type,e.gender_type,e.age_group,e.event_mode,e.sport_name,e.fixed_member_count,
         t.title tournament_title,t.certificates_enabled,t.certificate_self_download,t.certificate_require_approval,
         t.cert_org,t.cert_date,t.cert_place,t.cert_signer,t.cert_signer_position,t.cert_style,t.cert_heading,t.cert_footer_note,
         t.cert_logo_1,t.cert_logo_2,t.cert_logo_3,t.cert_background,t.cert_signature,t.cert_stamp
@@ -983,7 +1249,11 @@ def print_event_certificates(event_id):
         members=conn.execute('SELECT * FROM registration_members WHERE registration_id=? ORDER BY id',(reg['id'],)).fetchall()
         for member in members:
             code=get_or_create_cert(conn,reg['id'],member['id'],'individual')
-            certificates.append({'reg':reg,'member':member,'verification_code':code,'team_mode':False})
+            certificates.append({'reg':reg,'member':member,'verification_code':code,'team_mode':False,'coach_mode':False})
+        # เพิ่มเกียรติบัตรผู้ฝึกสอน 1 ใบต่อ 1 ทีม/รายการสมัคร
+        if (reg['coach_name'] or '').strip():
+            code=get_or_create_cert(conn,reg['id'],None,'coach')
+            certificates.append({'reg':reg,'member':{'member_name':reg['coach_name']},'verification_code':code,'team_mode':False,'coach_mode':True})
     conn.close()
     if not certificates:
         flash('ยังไม่มีรายชื่อที่อนุมัติแล้วในอีเวนต์นี้'); return redirect(url_for('tournament_registrations',tournament_id=event['tournament_id'],event_id=event_id))
@@ -998,7 +1268,7 @@ def certificate_qr(code):
 
 @app.route('/verify/<code>')
 def verify_certificate(code):
-    conn=get_db(); cert=conn.execute('''SELECT c.*,r.team_name,r.affiliation,r.award_result,r.award_custom,m.member_name,e.event_name,e.category_type,e.gender_type,e.age_group,t.title tournament_title FROM certificates c JOIN registrations r ON c.registration_id=r.id LEFT JOIN registration_members m ON c.member_id=m.id JOIN events e ON r.event_id=e.id JOIN tournaments t ON e.tournament_id=t.id WHERE c.verification_code=?''',(code,)).fetchone(); conn.close(); return render_template('verify_certificate.html',cert=cert,code=code)
+    conn=get_db(); cert=conn.execute('''SELECT c.*,r.team_name,r.affiliation,r.coach_name,r.award_result,r.award_custom,m.member_name,e.event_name,e.category_type,e.gender_type,e.age_group,e.event_mode,e.sport_name,e.fixed_member_count,t.title tournament_title FROM certificates c JOIN registrations r ON c.registration_id=r.id LEFT JOIN registration_members m ON c.member_id=m.id JOIN events e ON r.event_id=e.id JOIN tournaments t ON e.tournament_id=t.id WHERE c.verification_code=?''',(code,)).fetchone(); conn.close(); return render_template('verify_certificate.html',cert=cert,code=code)
 
 def safe_sheet_title(raw, used_titles):
     invalid='[]:*?/\\'

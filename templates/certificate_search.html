@@ -5,7 +5,7 @@
   <div class="card-head">
     <div>
       <h1>ค้นหาชื่อและปริ้นเกียรติบัตร</h1>
-      <p class="muted">กรอกชื่อนักกีฬาเพื่อค้นหาใบประกาศของตนเอง จากนั้นกดเปิดเกียรติบัตรและสั่งพิมพ์หรือบันทึกเป็น PDF ได้ทันที</p>
+      <p class="muted">กรอกชื่อนักกีฬาหรือผู้ฝึกสอนเพื่อค้นหาใบประกาศของตนเอง จากนั้นกดเปิดเกียรติบัตรและสั่งพิมพ์หรือบันทึกเป็น PDF ได้ทันที</p>
     </div>
     <a class="btn btn-secondary" href="{{ url_for('home') }}">← กลับหน้าสมัคร</a>
   </div>
@@ -13,7 +13,7 @@
 
 <div class="card">
   <form method="get" class="event-filter-form certificate-search-form">
-    <label for="q">ชื่อนักกีฬา</label>
+    <label for="q">ชื่อนักกีฬา / ชื่อผู้ฝึกสอน</label>
     <input id="q" name="q" type="search" value="{{ query }}" placeholder="พิมพ์ชื่อหรือนามสกุล เช่น พศิน" autocomplete="name" required minlength="2">
     <button class="btn btn-success" type="submit">ค้นหา</button>
   </form>
@@ -28,17 +28,17 @@
 <div class="card public-registration-card">
   <div class="card-head">
     <div>
-      <h3>{{ row['member_name'] }}</h3>
+      <h3>{{ row['member_name'] }} {% if row['person_type']=='coach' %}<span class="badge badge-soft">ผู้ฝึกสอน</span>{% endif %}</h3>
       <p class="muted">{{ row['tournament_title'] }}</p>
     </div>
     {% if row['is_waitlist'] %}<span class="badge">Waiting List</span>{% elif row['status']=='approved' %}<span class="badge badge-open">อนุมัติแล้ว</span>{% else %}<span class="badge badge-soft">รอตรวจสอบ</span>{% endif %}
   </div>
-  <p><strong>อีเวนต์:</strong> {{ row['event_name'] or category_label(row['category_type']) ~ ' ' ~ gender_label(row['gender_type']) ~ ' ' ~ age_label(row['age_group']) }}</p>
+  <p><strong>อีเวนต์:</strong> {{ event_display_name(row) }} · <strong>ชนิดกีฬา:</strong> {{ sport_competition_label(row) }}</p>
   <p><strong>ชื่อทีม:</strong> {{ row['team_name'] or '-' }} · <strong>ต้นสังกัด:</strong> {{ row['affiliation'] or '-' }}</p>
-  <p><strong>ผลการแข่งขัน:</strong> <span class="badge badge-soft">{{ award_label(row['award_result'],row['award_custom']) }}</span></p>
-  {% set cert_ready = row['is_complete'] and row['certificates_enabled'] and row['certificate_self_download'] and (not row['certificate_require_approval'] or row['status']=='approved') and not row['is_waitlist'] %}
+  {% if row['person_type']=='coach' %}<p><strong>ประเภทเกียรติบัตร:</strong> ผู้ฝึกสอน</p>{% else %}<p><strong>ผลการแข่งขัน:</strong> <span class="badge badge-soft">{{ award_label(row['award_result'],row['award_custom']) }}</span></p>{% endif %}
+  {% set cert_ready = row['is_complete'] and row['certificates_enabled'] and row['certificate_self_download'] and (row['event_mode']=='certificate_only' or not row['certificate_require_approval'] or row['status']=='approved') and not row['is_waitlist'] %}
   {% if cert_ready %}
-    <a class="btn btn-warning" target="_blank" href="{{ url_for('certificate_member',registration_id=row['registration_id'],member_id=row['member_id']) }}">เปิดเกียรติบัตรเพื่อปริ้น</a>
+    {% if row['person_type']=='coach' %}<a class="btn btn-warning" target="_blank" href="{{ url_for('certificate_coach',registration_id=row['registration_id']) }}">เปิดเกียรติบัตรผู้ฝึกสอนเพื่อปริ้น</a>{% else %}<a class="btn btn-warning" target="_blank" href="{{ url_for('certificate_member',registration_id=row['registration_id'],member_id=row['member_id']) }}">เปิดเกียรติบัตรเพื่อปริ้น</a>{% endif %}
   {% elif not row['is_complete'] %}
     <p class="flash warning-flash">รายชื่อนักกีฬายังไม่ครบ กรุณาติดต่อผู้ดูแล</p>
   {% elif row['is_waitlist'] %}

@@ -6,7 +6,7 @@ body.certificate-page{background:#e7ecf4;font-family:'Sarabun',Tahoma,'Noto Sans
 .print-toolbar button,.print-toolbar a{border:0;border-radius:9px;padding:9px 13px;background:#103d74;color:#fff;text-decoration:none;font:inherit;font-size:13px;cursor:pointer}.print-toolbar a{background:#eef1f6;color:#5d6574}
 .cert-sheet{width:297mm;height:210mm;margin:0 auto;background:#fff;position:relative;overflow:hidden;page-break-after:always;isolation:isolate}
 .cert-sheet:last-child{page-break-after:auto}
-.cert-background-image{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0}
+.cert-background-image{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;z-index:0}
 .cert-background-image.default-bg{object-fit:fill}
 .cert-frame-highlight{position:absolute;inset:7.6mm;border:1px solid rgba(214,170,74,.72);z-index:1;pointer-events:none}
 .cert-top-ornament{position:absolute;z-index:3;top:11mm;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:4mm;color:#c49025;opacity:.95}
@@ -29,7 +29,7 @@ body.certificate-page{background:#e7ecf4;font-family:'Sarabun',Tahoma,'Noto Sans
 .cert-lead{line-height:1.5;font-size:25px;color:#c79e37;margin-top:0}
 .cert-name{font-size:36px;line-height:2.2;color:#0d3464;font-weight:800;margin:1.4mm 0 .5mm;min-width:170mm;max-width:240mm;padding:0 3mm;white-space:normal;text-wrap:balance}
 .name-divider{display:flex;align-items:center;gap:2mm;margin:0 0 1.6mm;color:#c89b3c}.name-divider span{width:55mm;height:1px;background:linear-gradient(90deg,transparent,#c89b3c)}.name-divider span:last-child{background:linear-gradient(90deg,#c89b3c,transparent)}.name-divider b{font-size:10px}
-.cert-detail{font-size:24px;line-height:1.5;color:#222e3e;max-width:238mm}
+.cert-detail{    font-weight: 700;font-size:23.5px;line-height:1.35;color:#222e3e;max-width:238mm}
 .cert-detail .event-title{font-weight:800;color:#103b70;margin:.8mm 0 .2mm}
 .award-text{color:#a57218}
 .certificate-footer{width:100%;margin-top:auto;display:grid;grid-template-columns:49mm 1fr 45mm;align-items:end;min-height:43mm;padding:0 7mm 2mm}
@@ -39,7 +39,7 @@ body.certificate-page{background:#e7ecf4;font-family:'Sarabun',Tahoma,'Noto Sans
 .signature-image{max-width:56mm;max-height:20mm;object-fit:contain;z-index:2;filter:drop-shadow(0 1px 1px rgba(0,0,0,.08))}
 .stamp-image{position:absolute;right:-3mm;bottom:-3mm;width:30mm;height:30mm;object-fit:contain;opacity:.78;z-index:1}
 .sign-line{font-size:18px;display:inline-block;min-width:60mm;border-top:1px dotted #444;padding-top:2px;font-weight:600}
-.sign-position{font-size:18px;margin-top:.8mm}
+.sign-position{font-family:'Sarabun',Tahoma,'Noto Sans Thai',sans-serif;font-size:17px;font-weight:800;line-height:1.5;margin:1.2mm 0 0;color:0 1.5px 0 #fff,0 2px 0 #838281,0 3px 3px rgba(0, 0, 0, 0.18)}
 .qr-area{text-align:center;color:#657084;font-size:8px;padding-bottom:1.2mm}.qr-image,.qr-preview{width:23mm;height:23mm;padding:1.4mm;border:1px solid #c89b3c;border-radius:3mm;background:#fff;object-fit:contain}.qr-preview{display:grid;place-items:center;font-weight:800;font-size:16px;color:#9aa5b4;letter-spacing:1px}
 .cert-note{position:absolute;bottom:1.6mm;left:50%;transform:translateX(-50%);font-size:8px;color:#7c8797;max-width:150mm;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .preview-label{position:absolute;left:50%;top:52%;transform:translate(-50%,-50%) rotate(-20deg);z-index:20;font-size:48px;color:rgba(120,130,140,.12);font-weight:800;letter-spacing:8px;pointer-events:none}
@@ -68,3 +68,6 @@ body.certificate-page{background:#e7ecf4;font-family:'Sarabun',Tahoma,'Noto Sans
 .cert-note{
     font-family:'Sarabun',Tahoma,'Noto Sans Thai',sans-serif !important;
 }
+
+/* Signer position can be split by Enter or two spaces via the signer_position filter */
+.sign-position{white-space:normal}

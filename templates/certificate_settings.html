@@ -3,7 +3,7 @@
 {% block topbar_title %}ออกแบบเกียรติบัตร{% endblock %}
 {% block content %}
 <div class="page-head">
-  <div><h1>ตั้งค่าเกียรติบัตร</h1><p class="muted">{{ tournament['title'] }} · รองรับโลโก้ 3 รูป พื้นหลัง ลายเซ็น ตราประทับ และพรีวิวก่อนพิมพ์</p></div>
+  <div><h1>ตั้งค่าเกียรติบัตร</h1><p class="muted">{{ tournament['title'] }} · รองรับโลโก้ 3 รูป เทมเพลตพื้นหลัง PNG ลายเซ็น ตราประทับ และพรีวิวก่อนพิมพ์</p></div>
   <div class="page-actions"><a class="btn btn-soft" target="_blank" href="{{ url_for('certificate_preview',tournament_id=tournament['id']) }}">ดูตัวอย่างเกียรติบัตร</a><a class="btn btn-secondary" href="{{ url_for('manage_events',tournament_id=tournament['id']) }}">← กลับ</a></div>
 </div>
 <form method="post" enctype="multipart/form-data">
@@ -25,7 +25,14 @@
     <label>วันจัดการแข่งขัน</label><input name="cert_date" value="{{ tournament['cert_date'] or '' }}" placeholder="เช่น 11–12 เมษายน พ.ศ. 2569">
     <label>สถานที่</label><input name="cert_place" value="{{ tournament['cert_place'] or '' }}" placeholder="เช่น โรงเรียนบ้านหนองโก จังหวัดขอนแก่น">
     <label>ชื่อผู้ลงนาม</label><input name="cert_signer" value="{{ tournament['cert_signer'] or '' }}">
-    <label>ตำแหน่งผู้ลงนาม</label><input name="cert_signer_position" value="{{ tournament['cert_signer_position'] or '' }}" placeholder="เช่น ประธานจัดการแข่งขัน">
+    <label>ตำแหน่งผู้ลงนาม</label><textarea name="cert_signer_position" rows="3" placeholder="เช่น ปลัดองค์การบริหารส่วนจังหวัดขอนแก่น  รักษาราชการแทนนายกองค์การบริหารส่วนจังหวัดขอนแก่น">{{ tournament['cert_signer_position'] or '' }}</textarea>
+    <p class="muted">ต้องการขึ้นบรรทัดใหม่ให้กด Enter หรือเว้นวรรค 2 ครั้ง เช่น “ขอนแก่น  รักษาราชการ...”</p>
+  </div>
+</div>
+<div class="card">
+  <div class="card-head"><div><h3>เทมเพลตพื้นหลังเกียรติบัตร PNG</h3><p class="muted">อัปโหลดไฟล์ PNG เพื่อใช้เป็นพื้นหลังเต็มใบ A4 แนวนอน ระบบจะวางรูปเต็มหน้าเกียรติบัตรให้อัตโนมัติ</p></div></div>
+  <div class="cert-assets-grid one-main">
+    <div class="asset-card background-template-card"><strong>พื้นหลังเกียรติบัตร PNG</strong>{% if tournament['cert_background'] %}<img src="{{ url_for('uploaded_file',filename=tournament['cert_background']) }}" alt="พื้นหลังเกียรติบัตร"><label class="inline-check"><input type="checkbox" name="remove_cert_background"> ลบพื้นหลังเดิม</label>{% else %}<div class="asset-placeholder">ยังไม่มีพื้นหลัง PNG</div>{% endif %}<input type="file" name="cert_background" accept="image/png"><p class="muted">แนะนำทำไฟล์อัตราส่วน A4 แนวนอน 297:210 เช่น 3508 × 2480 px</p></div>
   </div>
 </div>
 <div class="card">
@@ -37,9 +44,9 @@
   </div>
 </div>
 <div class="card">
-  <div class="card-head"><div><h3>รูปประกอบเพิ่มเติม</h3><p class="muted">พื้นหลังเป็นตัวเลือกเสริม หากไม่อัปโหลดระบบจะใช้พื้นหลัง HTML/SVG น้ำเงิน–ทองที่เตรียมไว้</p></div></div>
+  <div class="card-head"><div><h3>ลายเซ็นและตราประทับ</h3><p class="muted">ใช้ PNG/JPG/WEBP ได้ แนะนำ PNG พื้นหลังโปร่งใสสำหรับลายเซ็นและตราประทับ</p></div></div>
   <div class="cert-assets-grid">
-  {% for field,label in [('cert_background','พื้นหลังเกียรติบัตร'),('cert_signature','รูปลายเซ็น'),('cert_stamp','ตราประทับ')] %}
+  {% for field,label in [('cert_signature','รูปลายเซ็น'),('cert_stamp','ตราประทับ')] %}
     <div class="asset-card"><strong>{{ label }}</strong>{% if tournament[field] %}<img src="{{ url_for('uploaded_file',filename=tournament[field]) }}" alt="{{ label }}"><label class="inline-check"><input type="checkbox" name="remove_{{ field }}"> ลบรูปเดิม</label>{% else %}<div class="asset-placeholder">ยังไม่มีรูป</div>{% endif %}<input type="file" name="{{ field }}" accept="image/png,image/jpeg,image/webp"></div>
   {% endfor %}
   </div>

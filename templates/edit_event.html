@@ -1,15 +1,62 @@
 {% extends 'base.html' %}{% block title %}แก้ไขอีเวนต์{% endblock %}{% block content %}
 <div class="card form-card"><h1>แก้ไขอีเวนต์</h1><h2>{{ tournament['title'] }}</h2>
 <form method="post">
+<label>รูปแบบอีเวนต์</label>
+<input type="hidden" name="event_mode" id="event_mode" value="{{ event['event_mode'] or 'competition' }}">
+<div class="mode-toggle" role="group" aria-label="เลือกรูปแบบอีเวนต์">
+  <button type="button" class="mode-choice" id="mode_competition" onclick="setEventMode('competition')">
+    <strong>สมัครแข่งขันปกติ</strong>
+    <span>ใช้ระบบสมัครแข่งขันเดิม มีค่าสมัคร จำกัดทีม และรออนุมัติได้</span>
+  </button>
+  <button type="button" class="mode-choice" id="mode_certificate_only" onclick="setEventMode('certificate_only')">
+    <strong>ออกเกียรติบัตรอย่างเดียว</strong>
+    <span>กรอกชื่อทีม นักกีฬา ผู้ฝึกสอน แล้วเปิดปริ้นเกียรติบัตรได้เลย</span>
+  </button>
+</div>
+<p id="mode_note" class="muted"></p>
+
 <label>ชื่ออีเวนต์</label><input name="event_name" value="{{ event['event_name'] or '' }}">
+<label>ชนิดกีฬา</label><input name="sport_name" id="sport_name" value="{{ event['sport_name'] or '' }}" placeholder="เช่น เปตอง, ฟุตบอล, วอลเลย์บอล, ตะกร้อ">
 <label>ประเภท</label><select name="category_type" id="category_type" onchange="updateMemberHint()"><option value="single" {% if event['category_type']=='single' %}selected{% endif %}>เดี่ยว</option><option value="pair" {% if event['category_type']=='pair' %}selected{% endif %}>คู่</option><option value="team" {% if event['category_type']=='team' %}selected{% endif %}>ทีม</option></select><p id="member_hint" class="muted"></p>
 <label>เพศ</label><select name="gender_type"><option value="male" {% if event['gender_type']=='male' %}selected{% endif %}>ชาย</option><option value="female" {% if event['gender_type']=='female' %}selected{% endif %}>หญิง</option><option value="mixed" {% if event['gender_type']=='mixed' %}selected{% endif %}>ผสม</option><option value="open" {% if event['gender_type']=='open' %}selected{% endif %}>ไม่ระบุ</option></select>
-<label>รุ่น</label><input name="age_group" value="{{ event['age_group'] }}">
+<label>รุ่นการแข่งขัน</label><input name="age_group" value="{{ event['age_group'] }}">
+<div id="certificate_only_wrap">
+  <label>จำนวนนักกีฬาที่ให้กรอก</label><input type="number" min="1" max="99" name="fixed_member_count" id="fixed_member_count" value="{{ event['fixed_member_count'] or event['team_size'] or 5 }}">
+  <p class="muted">ระบบจะล็อกจำนวนช่องชื่อนักกีฬาในหน้ากรอกข้อมูลตามจำนวนนี้</p>
+</div>
 <hr><label class="inline-check"><input type="checkbox" name="has_fee" id="has_fee" onchange="toggleFee()" {% if event['has_fee'] %}checked{% endif %}> มีค่าสมัคร</label><div id="fee_wrap"><label>ค่าสมัคร (บาท)</label><input type="number" min="0" name="fee" value="{{ event['fee'] }}"><label>คิดราคาต่อ</label><select name="fee_per"><option value="team" {% if event['fee_per']=='team' %}selected{% endif %}>ทีม</option><option value="person" {% if event['fee_per']=='person' %}selected{% endif %}>คน</option></select><label class="inline-check"><input type="checkbox" name="require_slip" {% if event['require_slip'] %}checked{% endif %}> บังคับแนบสลิป</label></div>
 <hr><label class="inline-check"><input type="checkbox" name="has_limit" id="has_limit" onchange="toggleLimit()" {% if event['has_limit'] %}checked{% endif %}> จำกัดจำนวนผู้สมัคร</label><div id="limit_wrap"><label>จำนวนสูงสุด</label><input type="number" min="1" name="max_slots" value="{{ event['max_slots'] }}"><label class="inline-check"><input type="checkbox" name="waitlist_enabled" id="waitlist_enabled" onchange="toggleWait()" {% if event['waitlist_enabled'] %}checked{% endif %}> เปิดรายชื่อสำรองเมื่อเต็ม</label><div id="wait_wrap"><label>จำนวนสำรองสูงสุด (0 = ไม่จำกัด)</label><input type="number" min="0" name="waitlist_limit" value="{{ event['waitlist_limit'] }}"></div></div>
-<hr><label class="inline-check"><input type="checkbox" name="is_open" {% if event['is_open'] %}checked{% endif %}> เปิดรับสมัคร</label><button>บันทึกการแก้ไข</button> <a class="btn btn-secondary" href="{{ url_for('manage_events',tournament_id=tournament['id']) }}">กลับ</a>
+<hr><label class="inline-check"><input type="checkbox" name="is_open" {% if event['is_open'] %}checked{% endif %}> เปิดรับสมัคร / เปิดให้กรอกข้อมูล</label><button>บันทึกการแก้ไข</button> <a class="btn btn-secondary" href="{{ url_for('manage_events',tournament_id=tournament['id']) }}">กลับ</a>
 </form></div>
 <script>
-function updateMemberHint(){const t=document.getElementById('category_type').value;document.getElementById('member_hint').textContent=t==='single'?'นักกีฬา 1 คน':(t==='pair'?'เลือกสมัครได้ 2 หรือ 3 คน':'เลือกสมัครได้ 3 หรือ 4 คน')}
-function toggleFee(){document.getElementById('fee_wrap').style.display=document.getElementById('has_fee').checked?'block':'none'}function toggleLimit(){document.getElementById('limit_wrap').style.display=document.getElementById('has_limit').checked?'block':'none'}function toggleWait(){document.getElementById('wait_wrap').style.display=document.getElementById('waitlist_enabled').checked?'block':'none'}updateMemberHint();toggleFee();toggleLimit();toggleWait();
+function setEventMode(mode){
+  document.getElementById('event_mode').value=mode;
+  document.getElementById('mode_competition').classList.toggle('active', mode==='competition');
+  document.getElementById('mode_certificate_only').classList.toggle('active', mode==='certificate_only');
+  toggleEventMode();
+}
+function updateMemberHint(){
+  const mode=document.getElementById('event_mode').value;
+  const t=document.getElementById('category_type').value;
+  if(mode==='certificate_only'){
+    document.getElementById('member_hint').textContent='โหมดเกียรติบัตรจะใช้จำนวนช่องนักกีฬาตามที่แอดมินระบุด้านล่าง';
+    return;
+  }
+  document.getElementById('member_hint').textContent=t==='single'?'นักกีฬา 1 คน':(t==='pair'?'เลือกสมัครได้ 2 หรือ 3 คน':'เลือกสมัครได้ 3 หรือ 4 คน')
+}
+function toggleFee(){document.getElementById('fee_wrap').style.display=document.getElementById('has_fee').checked?'block':'none'}
+function toggleLimit(){document.getElementById('limit_wrap').style.display=document.getElementById('has_limit').checked?'block':'none'}
+function toggleWait(){document.getElementById('wait_wrap').style.display=document.getElementById('waitlist_enabled').checked?'block':'none'}
+function toggleEventMode(){
+  const cert=document.getElementById('event_mode').value==='certificate_only';
+  document.getElementById('certificate_only_wrap').style.display=cert?'block':'none';
+  document.getElementById('mode_note').textContent='ตอนนี้เลือก: '+(cert?'ออกเกียรติบัตรอย่างเดียว':'สมัครแข่งขันปกติ');
+  if(cert){
+    document.getElementById('category_type').value='team';
+    document.getElementById('has_fee').checked=false;
+    toggleFee();
+  }
+  updateMemberHint();
+}
+setEventMode(document.getElementById('event_mode').value || 'competition');toggleFee();toggleLimit();toggleWait();
 </script>{% endblock %}

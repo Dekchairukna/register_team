@@ -25,25 +25,28 @@
       <div class="cert-heading">{{ reg['cert_heading'] or 'เกียรติบัตร' }}</div>
       <div class="org-name">{{ reg['cert_org'] or reg['tournament_title'] }}</div>
       
-      <div class="cert-subtitle"><i></i><span>การแข่งขันกีฬาเปตอง</span><i></i></div>
+      <div class="cert-subtitle"><i></i><span>การแข่งขัน{{ sport_competition_label(reg) }}</span><i></i></div>
     </header>
 
     <main class="certificate-main">
+      {% set is_coach = coach_mode|default(false) %}
       <div class="cert-lead">ขอมอบเกียรติบัตรฉบับนี้ให้แก่</div>
-      <div class="cert-name">{% if team_mode %}{{ reg['team_name'] or reg['affiliation'] or 'ทีมผู้เข้าร่วมการแข่งขัน' }}{% else %}{{ member['member_name'] }}{% endif %}</div>
+      <div class="cert-name">{% if team_mode %}{{ reg['team_name'] or reg['affiliation'] or 'ทีมผู้เข้าร่วมการแข่งขัน' }}{% elif is_coach %}{{ reg['coach_name'] }}{% else %}{{ member['member_name'] }}{% endif %}</div>
       <div class="name-divider"><span></span><b>◆</b><span></span></div>
       <div class="cert-detail">
-        {% if (reg['award_result'] or 'participant') == 'participant' %}
-          <div>เพื่อแสดงว่าได้เข้าร่วมการแข่งขันกีฬาเปตอง</div>
+        {% if is_coach %}
+          <div>เพื่อแสดงว่าได้ปฏิบัติหน้าที่ <strong class="award-text">ผู้ฝึกสอน</strong> ในการแข่งขัน{{ sport_competition_label(reg) }}</div>
+        {% elif (reg['award_result'] or 'participant') == 'participant' %}
+          <div>เพื่อแสดงว่าได้เข้าร่วมการแข่งขัน{{ sport_competition_label(reg) }}</div>
         {% else %}
-          <div>เพื่อแสดงว่าได้รับรางวัล <strong class="award-text">{{ award_label(reg['award_result'],reg['award_custom']) }}</strong></div>
+          <div>เพื่อแสดงว่าได้รับรางวัล <strong class="award-text">{{ award_label(reg['award_result'],reg['award_custom']) }}</strong> </div>
         {% endif %}
         <div class="event-title">{{ reg['tournament_title'] }}</div>
-        <div>ประเภท {{ reg['event_name'] or category_label(reg['category_type']) ~ ' ' ~ gender_label(reg['gender_type']) ~ ' ' ~ age_label(reg['age_group']) }}</div>
-        {% if reg['affiliation'] %}<div>ในนาม {{ reg['affiliation'] }}</div>{% endif %}
-        {% if reg['cert_date'] or reg['cert_place'] %}
-          <div>จัดขึ้น{% if reg['cert_date'] %}วันที่ {{ reg['cert_date'] }}{% endif %}{% if reg['cert_place'] %} ณ {{ reg['cert_place'] }}{% endif %}</div>
-        {% endif %}
+        {% set cat_line = cert_category_line(reg) %}
+        {% if cat_line %}<div>ประเภท {{ sport_competition_label(reg) }}{{ cat_line }}</div>{% endif %}
+        
+        {% if reg['cert_place'] %}<div>ณ {{ reg['cert_place'] }}</div>{% endif %}
+        <div>ให้ไว้ ณ วันที่ {{ reg['cert_date'] | cert_issue_date }}</div>
       </div>
     </main>
 
@@ -67,9 +70,7 @@
 
   {% if reg['cert_signer'] %}
     <div class="sign-line">({{ reg['cert_signer'] }})</div>
-    <div class="sign-position">
-      {{ (reg['cert_signer_position'] or '') | replace('\n', '<br>') | safe }}
-    </div>
+    <div class="sign-position">{{ reg['cert_signer_position'] | signer_position }}</div>
   {% else %}
     <div class="sign-line">(................................................)</div>
     <div class="sign-position">ประธานจัดการแข่งขัน</div>
