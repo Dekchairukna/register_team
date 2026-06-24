@@ -56,19 +56,25 @@
       </div>
 
       <div class="signature-area">
-        <div class="signature-stack">
-          {% if reg['cert_signature'] %}<img class="signature-image" src="{{ url_for('uploaded_file',filename=reg['cert_signature']) }}" alt="ลายเซ็น">{% endif %}
-          {% if reg['cert_stamp'] %}<img class="stamp-image" src="{{ url_for('uploaded_file',filename=reg['cert_stamp']) }}" alt="ตราประทับ">{% endif %}
-        </div>
-        {% if reg['cert_signer'] %}
-          <div class="sign-line">({{ reg['cert_signer'] }})</div>
-          <div class="sign-position">{{ reg['cert_signer_position'] or '' }}</div>
-        {% else %}
-          <div class="sign-line">(................................................)</div>
-          <div class="sign-position">ประธานจัดการแข่งขัน</div>
-        {% endif %}
-      </div>
+  <div class="signature-stack">
+    {% if reg['cert_signature'] %}
+      <img class="signature-image" src="{{ url_for('uploaded_file',filename=reg['cert_signature']) }}" alt="ลายเซ็น">
+    {% endif %}
+    {% if reg['cert_stamp'] %}
+      <img class="stamp-image" src="{{ url_for('uploaded_file',filename=reg['cert_stamp']) }}" alt="ตราประทับ">
+    {% endif %}
+  </div>
 
+  {% if reg['cert_signer'] %}
+    <div class="sign-line">({{ reg['cert_signer'] }})</div>
+    <div class="sign-position">
+      {{ (reg['cert_signer_position'] or '') | replace('\n', '<br>') | safe }}
+    </div>
+  {% else %}
+    <div class="sign-line">(................................................)</div>
+    <div class="sign-position">ประธานจัดการแข่งขัน</div>
+  {% endif %}
+</div>
       <div class="qr-area">
         {% if verification_code %}
           <img class="qr-image" src="{{ url_for('certificate_qr',code=verification_code) }}" alt="QR Code">
