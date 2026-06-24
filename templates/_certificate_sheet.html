@@ -6,7 +6,7 @@
   {% endif %}
 
   <div class="cert-frame-highlight"></div>
-  <div class="cert-top-ornament"><span></span><b>✦</b><span></span></div>
+  
   {% if preview_mode|default(false) %}<div class="preview-label">PREVIEW</div>{% endif %}
 
   <div class="cert-inner">
@@ -21,8 +21,10 @@
           {% endif %}
         {% endfor %}
       </div>
-      <div class="org-name">{{ reg['cert_org'] or reg['tournament_title'] }}</div>
+      
       <div class="cert-heading">{{ reg['cert_heading'] or 'เกียรติบัตร' }}</div>
+      <div class="org-name">{{ reg['cert_org'] or reg['tournament_title'] }}</div>
+      
       <div class="cert-subtitle"><i></i><span>การแข่งขันกีฬาเปตอง</span><i></i></div>
     </header>
 

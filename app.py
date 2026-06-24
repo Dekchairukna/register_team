@@ -201,6 +201,7 @@ def event_reg_count(event_id, include_waitlist=False):
 def save_uploaded_file(file_obj,prefix='file'):
     if not file_obj or not file_obj.filename: return None
     if not allowed_file(file_obj.filename): return None
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
     ext=secure_filename(file_obj.filename).rsplit('.',1)[1].lower()
     name=f"{prefix}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}.{ext}"
     file_obj.save(os.path.join(UPLOAD_FOLDER,name)); return name
@@ -215,6 +216,7 @@ def save_certificate_asset(file_obj, prefix):
         return None
     if not allowed_file(file_obj.filename, CERT_IMAGE_EXTENSIONS):
         return None
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
     ext=secure_filename(file_obj.filename).rsplit('.',1)[1].lower()
     name=f"{prefix}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}.{ext}"
     file_obj.save(os.path.join(UPLOAD_FOLDER,name))

@@ -1,0 +1,7 @@
+อัปเดตเกียรติบัตรหลายเทมเพลต
+
+- เพิ่มให้หน้า ตั้งค่าเกียรติบัตร เลือกเทมเพลต SVG ได้ 11 แบบ
+- ใช้ไฟล์ใน static/certificate_assets/ ได้แก่ 01_premium_blue_gold_A4.svg ถึง 11_template_from_collage_A4.svg
+- ถ้าอัปโหลดพื้นหลังเอง ระบบจะใช้พื้นหลังที่อัปโหลดแทนเทมเพลต
+- ปรับ _certificate_sheet.html ให้ดึงไฟล์ SVG ตาม cert_style
+- ปรับ app.py ให้บันทึก cert_style ใหม่ได้ครบทุกแบบ
