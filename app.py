@@ -135,8 +135,9 @@ def get_db():
         import psycopg
         from psycopg.rows import dict_row
         return PostgresConnection(psycopg.connect(DATABASE_URL, row_factory=dict_row))
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_NAME, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA busy_timeout=30000')
     return conn
 
 
@@ -323,11 +324,76 @@ def incomplete_import_allowed(event, team_name, members):
     if event['category_type']=='single': return len(members)==1
     return bool(team_name or members)
 
-def event_reg_count(event_id, include_waitlist=False):
-    conn=get_db(); q='SELECT COUNT(*) total FROM registrations WHERE event_id=?'
+def _zero_event_count():
+    return {'total': 0, 'active': 0, 'waitlist': 0, 'approved': 0, 'pending': 0, 'incomplete': 0, 'awarded': 0}
+
+
+def event_counts_map(conn, event_ids=None, tournament_id=None):
+    """นับจำนวนผู้สมัครแบบรวมครั้งเดียว ลดปัญหาเปิด DB ซ้ำหลายรอบจนระบบช้า"""
+    params = []
+    where = ''
+    if event_ids is not None:
+        ids = [int(x) for x in event_ids if x is not None]
+        if not ids:
+            return {}
+        marks = ','.join(['?'] * len(ids))
+        where = f'WHERE e.id IN ({marks})'
+        params = ids
+    elif tournament_id is not None:
+        where = 'WHERE e.tournament_id=?'
+        params = [tournament_id]
+    else:
+        return {}
+    rows = conn.execute(f'''
+        SELECT e.id event_id,
+            COUNT(r.id) total,
+            SUM(CASE WHEN r.id IS NOT NULL AND COALESCE(r.is_waitlist,0)=0 THEN 1 ELSE 0 END) active,
+            SUM(CASE WHEN r.id IS NOT NULL AND COALESCE(r.is_waitlist,0)=1 THEN 1 ELSE 0 END) waitlist,
+            SUM(CASE WHEN r.id IS NOT NULL AND r.status='approved' THEN 1 ELSE 0 END) approved,
+            SUM(CASE WHEN r.id IS NOT NULL AND r.status!='approved' THEN 1 ELSE 0 END) pending,
+            SUM(CASE WHEN r.id IS NOT NULL AND COALESCE(r.is_complete,0)=0 THEN 1 ELSE 0 END) incomplete,
+            SUM(CASE WHEN r.id IS NOT NULL AND r.award_result IS NOT NULL AND r.award_result!='participant' THEN 1 ELSE 0 END) awarded
+        FROM events e
+        LEFT JOIN registrations r ON r.event_id=e.id
+        {where}
+        GROUP BY e.id
+    ''', params).fetchall()
+    out = {}
+    for row in rows:
+        out[int(row['event_id'])] = {
+            'total': int(row['total'] or 0),
+            'active': int(row['active'] or 0),
+            'waitlist': int(row['waitlist'] or 0),
+            'approved': int(row['approved'] or 0),
+            'pending': int(row['pending'] or 0),
+            'incomplete': int(row['incomplete'] or 0),
+            'awarded': int(row['awarded'] or 0),
+        }
+    return out
+
+
+def event_reg_count(event_id, include_waitlist=False, conn=None):
+    close_conn = False
+    if conn is None:
+        conn = get_db(); close_conn = True
+    q='SELECT COUNT(*) total FROM registrations WHERE event_id=?'
     args=[event_id]
-    if not include_waitlist: q += ' AND is_waitlist=0'
-    total=conn.execute(q,args).fetchone()['total']; conn.close(); return total
+    if not include_waitlist: q += ' AND COALESCE(is_waitlist,0)=0'
+    total=conn.execute(q,args).fetchone()['total']
+    if close_conn: conn.close()
+    return total
+
+
+def registration_members_map(conn, registration_ids, select_cols='id, registration_id, member_name, member_idcard, idcard_file'):
+    ids = [int(x) for x in registration_ids if x is not None]
+    if not ids:
+        return {}
+    marks = ','.join(['?'] * len(ids))
+    rows = conn.execute(f'SELECT {select_cols} FROM registration_members WHERE registration_id IN ({marks}) ORDER BY registration_id,id', ids).fetchall()
+    out = {rid: [] for rid in ids}
+    for row in rows:
+        out.setdefault(int(row['registration_id']), []).append(row)
+    return out
 
 def save_uploaded_file(file_obj,prefix='file'):
     if not file_obj or not file_obj.filename: return None
@@ -390,11 +456,21 @@ def uploaded_file(filename): return send_from_directory(UPLOAD_FOLDER,filename)
 
 @app.route('/')
 def home():
-    conn=get_db(); tournaments=conn.execute('SELECT * FROM tournaments ORDER BY id DESC').fetchall(); event_map={}; count_map={}
-    for t in tournaments:
-        events=conn.execute('SELECT * FROM events WHERE tournament_id=? ORDER BY id',(t['id'],)).fetchall(); event_map[t['id']]=events
-        count_map[t['id']]={e['id']:event_reg_count(e['id']) for e in events}
-    conn.close(); return render_template('home.html',tournaments=tournaments,event_map=event_map,count_map=count_map)
+    conn=get_db()
+    tournaments=conn.execute('SELECT * FROM tournaments ORDER BY id DESC').fetchall()
+    event_map={}; count_map={}
+    tournament_ids=[t['id'] for t in tournaments]
+    if tournament_ids:
+        marks=','.join(['?']*len(tournament_ids))
+        events=conn.execute(f'SELECT * FROM events WHERE tournament_id IN ({marks}) ORDER BY tournament_id,id',tournament_ids).fetchall()
+        counts=event_counts_map(conn,event_ids=[e['id'] for e in events])
+        for t in tournaments:
+            event_map[t['id']]=[]; count_map[t['id']]={}
+        for e in events:
+            event_map[e['tournament_id']].append(e)
+            count_map[e['tournament_id']][e['id']]=counts.get(e['id'],_zero_event_count())['active']
+    conn.close()
+    return render_template('home.html',tournaments=tournaments,event_map=event_map,count_map=count_map)
 
 
 @app.route('/tournament/<int:tournament_id>/registrations')
@@ -416,9 +492,10 @@ def public_tournament_registrations(tournament_id):
         query += ' AND e.id=?'; args.append(selected_event_id)
     query += ' ORDER BY e.id,r.id'
     rows=conn.execute(query,args).fetchall()
-    members_map={r['id']:conn.execute('SELECT member_name FROM registration_members WHERE registration_id=? ORDER BY id',(r['id'],)).fetchall() for r in rows}
-    count_map={e['id']:event_reg_count(e['id']) for e in events}
-    wait_map={e['id']:max(0,event_reg_count(e['id'],True)-count_map[e['id']]) for e in events}
+    members_map=registration_members_map(conn,[r['id'] for r in rows],select_cols='id, registration_id, member_name')
+    count_rows=event_counts_map(conn,event_ids=[e['id'] for e in events])
+    count_map={e['id']:count_rows.get(e['id'],_zero_event_count())['active'] for e in events}
+    wait_map={e['id']:count_rows.get(e['id'],_zero_event_count())['waitlist'] for e in events}
     conn.close()
     return render_template('public_registrations.html',tournament=tournament,events=events,selected_event=selected_event,selected_event_id=selected_event_id,rows=rows,members_map=members_map,count_map=count_map,wait_map=wait_map)
 
@@ -595,12 +672,25 @@ def logout(): session.clear(); flash('ออกจากระบบแล้ว
 @app.route('/admin')
 def admin_dashboard():
     if not is_logged_in(): return redirect(url_for('login'))
-    conn=get_db(); tournaments=conn.execute('SELECT * FROM tournaments WHERE created_by=? ORDER BY id DESC',(session['user_id'],)).fetchall(); event_map={}; count_map={}; dashboard={'tournaments':len(tournaments),'events':0,'registrations':0,'open_events':0}
-    for t in tournaments:
-        es=conn.execute('SELECT * FROM events WHERE tournament_id=? ORDER BY id',(t['id'],)).fetchall(); event_map[t['id']]=es; count_map[t['id']]={}
-        for e in es:
-            n=event_reg_count(e['id']); count_map[t['id']][e['id']]=n; dashboard['events']+=1; dashboard['registrations']+=n; dashboard['open_events']+=1 if e['is_open'] else 0
-    conn.close(); return render_template('admin_dashboard.html',tournaments=tournaments,event_map=event_map,count_map=count_map,dashboard=dashboard)
+    conn=get_db()
+    tournaments=conn.execute('SELECT * FROM tournaments WHERE created_by=? ORDER BY id DESC',(session['user_id'],)).fetchall()
+    event_map={}; count_map={}; dashboard={'tournaments':len(tournaments),'events':0,'registrations':0,'open_events':0}
+    tournament_ids=[t['id'] for t in tournaments]
+    if tournament_ids:
+        marks=','.join(['?']*len(tournament_ids))
+        events=conn.execute(f'SELECT * FROM events WHERE tournament_id IN ({marks}) ORDER BY tournament_id,id',tournament_ids).fetchall()
+        counts=event_counts_map(conn,event_ids=[e['id'] for e in events])
+        for t in tournaments:
+            event_map[t['id']]=[]; count_map[t['id']]={}
+        for e in events:
+            n=counts.get(e['id'],_zero_event_count())['active']
+            event_map[e['tournament_id']].append(e)
+            count_map[e['tournament_id']][e['id']]=n
+            dashboard['events'] += 1
+            dashboard['registrations'] += n
+            dashboard['open_events'] += 1 if e['is_open'] else 0
+    conn.close()
+    return render_template('admin_dashboard.html',tournaments=tournaments,event_map=event_map,count_map=count_map,dashboard=dashboard)
 
 @app.route('/admin/tournament/create',methods=['GET','POST'])
 def create_tournament():
@@ -627,7 +717,12 @@ def manage_events(tournament_id):
     if not is_logged_in(): return redirect(url_for('login'))
     conn=get_db(); t=get_owned_tournament(conn,tournament_id)
     if not t: conn.close(); return redirect(url_for('admin_dashboard'))
-    events=conn.execute('SELECT * FROM events WHERE tournament_id=? ORDER BY id',(tournament_id,)).fetchall(); counts={e['id']:event_reg_count(e['id']) for e in events}; waitcounts={e['id']:event_reg_count(e['id'],True)-counts[e['id']] for e in events}; total=sum(counts.values()); conn.close()
+    events=conn.execute('SELECT * FROM events WHERE tournament_id=? ORDER BY id',(tournament_id,)).fetchall()
+    count_rows=event_counts_map(conn,event_ids=[e['id'] for e in events])
+    counts={e['id']:count_rows.get(e['id'],_zero_event_count())['active'] for e in events}
+    waitcounts={e['id']:count_rows.get(e['id'],_zero_event_count())['waitlist'] for e in events}
+    total=sum(counts.values())
+    conn.close()
     return render_template('manage_events.html',tournament=t,events=events,counts=counts,waitcounts=waitcounts,total_regs=total)
 
 
@@ -712,16 +807,12 @@ def tournament_registrations(tournament_id):
     all_rows=conn.execute(base_query + ' ORDER BY e.id,r.id DESC',base_args).fetchall()
     query=base_query + (" AND r.status='approved'" if status_filter=='approved' else " AND r.status!='approved'") + ' ORDER BY e.id,r.id DESC'
     rows=conn.execute(query,base_args).fetchall()
-    members_map={r['id']:conn.execute('SELECT * FROM registration_members WHERE registration_id=? ORDER BY id',(r['id'],)).fetchall() for r in rows}
+    members_map=registration_members_map(conn,[r['id'] for r in rows])
+    count_rows=event_counts_map(conn,event_ids=[e['id'] for e in events])
     summary=[]
     for e in events:
-        st=conn.execute('''SELECT COUNT(*) total,
-            SUM(CASE WHEN status='approved' THEN 1 ELSE 0 END) approved,
-            SUM(CASE WHEN status!='approved' THEN 1 ELSE 0 END) pending,
-            SUM(CASE WHEN is_waitlist=1 THEN 1 ELSE 0 END) waitlist,
-            SUM(CASE WHEN award_result IS NOT NULL AND award_result!='participant' THEN 1 ELSE 0 END) awarded
-            FROM registrations WHERE event_id=?''',(e['id'],)).fetchone()
-        summary.append(dict(event=e,total=st['total'] or 0,approved=st['approved'] or 0,pending=st['pending'] or 0,waitlist=st['waitlist'] or 0,awarded=st['awarded'] or 0))
+        st=count_rows.get(e['id'],_zero_event_count())
+        summary.append(dict(event=e,total=st['total'],approved=st['approved'],pending=st['pending'],waitlist=st['waitlist'],awarded=st['awarded']))
     stats={
         'total':len(all_rows),
         'approved':sum(1 for r in all_rows if r['status']=='approved'),
@@ -1005,6 +1096,7 @@ def import_registrations_all(tournament_id):
 
         # ตรวจจำนวนรับสมัครแบบรวมทั้งไฟล์ก่อนบันทึกจริง
         planned_active={}; planned_wait={}; accepted_records=[]
+        current_counts=event_counts_map(conn,event_ids=[e['id'] for e in events]) if not replace_existing else {}
         for record in records:
             e=event_map.get(int(record['event_id']))
             if not e:
@@ -1014,9 +1106,9 @@ def import_registrations_all(tournament_id):
                 if replace_existing:
                     planned_active[eid]=0; planned_wait[eid]=0
                 else:
-                    active_now=event_reg_count(eid)
-                    planned_active[eid]=active_now
-                    planned_wait[eid]=event_reg_count(eid,True)-active_now
+                    st=current_counts.get(eid,_zero_event_count())
+                    planned_active[eid]=st['active']
+                    planned_wait[eid]=st['waitlist']
             has_limit=bool(e['has_limit'] and int(e['max_slots'] or 0)>0)
             if not has_limit or planned_active[eid]<int(e['max_slots'] or 0):
                 record['is_waitlist']=0; planned_active[eid]+=1; accepted_records.append(record); continue
@@ -1126,15 +1218,19 @@ def _parse_public_bulk_sheet(events,ws,default_contact='',default_phone=''):
 
 def _preview_capacity(records,events):
     event_map={int(e['id']):e for e in events}; planned_active={}; planned_wait={}; accepted=[]; errors=[]
+    conn=get_db(); current_counts=event_counts_map(conn,event_ids=[e['id'] for e in events]); conn.close()
     for record in records:
         e=event_map.get(int(record['event_id']))
         if not e or not e['is_open']:
             errors.append(f"แถว {record['rowno']}: อีเวนต์ปิดรับสมัครแล้ว"); continue
-        eid=int(e['id']); active=planned_active.setdefault(eid,event_reg_count(eid)); wait=planned_wait.setdefault(eid,event_reg_count(eid,True)-active)
+        eid=int(e['id'])
+        if eid not in planned_active:
+            st=current_counts.get(eid,_zero_event_count())
+            planned_active[eid]=st['active']; planned_wait[eid]=st['waitlist']
         has_limit=bool(e['has_limit'] and int(e['max_slots'] or 0)>0)
-        if not has_limit or active<int(e['max_slots'] or 0):
+        if not has_limit or planned_active[eid]<int(e['max_slots'] or 0):
             record['is_waitlist']=0; planned_active[eid]+=1; accepted.append(record); continue
-        can_wait=bool(e['waitlist_enabled'] and (int(e['waitlist_limit'] or 0)<=0 or wait<int(e['waitlist_limit'] or 0)))
+        can_wait=bool(e['waitlist_enabled'] and (int(e['waitlist_limit'] or 0)<=0 or planned_wait[eid]<int(e['waitlist_limit'] or 0)))
         if can_wait:
             record['is_waitlist']=1; planned_wait[eid]+=1; accepted.append(record)
         else:
@@ -1168,18 +1264,29 @@ def public_bulk_register(tournament_id):
                 flash('ข้อมูลพรีวิวหมดอายุ กรุณาอัปโหลด Excel ใหม่'); return redirect(request.url)
             records=payload.get('records',[]); conn=get_db(); imported=[]; errors=[]; by_event={}
             event_map={int(e['id']):e for e in events}
+            current_counts=event_counts_map(conn,event_ids=[e['id'] for e in events])
+            planned_active={}; planned_wait={}; c=conn.cursor()
             for record in records:
                 e=event_map.get(int(record['event_id']))
                 if not e:
                     errors.append(f"แถว {record['rowno']}: อีเวนต์ปิดรับสมัครแล้ว"); continue
-                full,wait=registration_capacity_state(e)
-                if full and not wait:
-                    errors.append(f"แถว {record['rowno']}: {record['event_name']} เต็มแล้ว"); continue
+                eid=int(e['id'])
+                if eid not in planned_active:
+                    st=current_counts.get(eid,_zero_event_count())
+                    planned_active[eid]=st['active']; planned_wait[eid]=st['waitlist']
+                has_limit=bool(e['has_limit'] and int(e['max_slots'] or 0)>0)
+                is_waitlist=0
+                if has_limit and planned_active[eid]>=int(e['max_slots'] or 0):
+                    can_wait=bool(e['waitlist_enabled'] and (int(e['waitlist_limit'] or 0)<=0 or planned_wait[eid]<int(e['waitlist_limit'] or 0)))
+                    if not can_wait:
+                        errors.append(f"แถว {record['rowno']}: {record['event_name']} เต็มแล้ว"); continue
+                    is_waitlist=1; planned_wait[eid]+=1
+                else:
+                    planned_active[eid]+=1
                 code=unique_registration_code(conn)
-                rid=insert_returning_id(conn,'''INSERT INTO registrations(event_id,team_name,affiliation,contact_name,phone,notes,created_at,member_count,source,registration_code,status,is_waitlist,is_complete) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',(e['id'],record['team_name'] or None,record['affiliation'] or None,record['contact_name'],record['phone'],record['notes'],now(),record['member_count'],'public_excel_all',code,'pending',1 if full and wait else 0,record.get('is_complete',0)))
-                c=conn.cursor()
+                rid=insert_returning_id(conn,'''INSERT INTO registrations(event_id,team_name,affiliation,contact_name,phone,notes,created_at,member_count,source,registration_code,status,is_waitlist,is_complete) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',(e['id'],record['team_name'] or None,record['affiliation'] or None,record['contact_name'],record['phone'],record['notes'],now(),record['member_count'],'public_excel_all',code,'pending',is_waitlist,record.get('is_complete',0)))
                 for m in record['members']: c.execute('INSERT INTO registration_members(registration_id,member_name,member_idcard) VALUES(?,?,?)',(rid,m['name'],m['idcard']))
-                item=dict(record); item.update(registration_code=code,registration_id=rid,is_waitlist=1 if full and wait else 0)
+                item=dict(record); item.update(registration_code=code,registration_id=rid,is_waitlist=is_waitlist)
                 imported.append(item); by_event[item['event_name']]=by_event.get(item['event_name'],0)+1
             conn.execute('INSERT INTO import_logs(tournament_id,import_type,filename,imported_count,error_count,created_at) VALUES(?,?,?,?,?,?)',(tournament_id,'public_registrations_all_events',payload.get('filename','public_bulk.xlsx'),len(imported),len(errors),now()))
             conn.commit(); conn.close()
