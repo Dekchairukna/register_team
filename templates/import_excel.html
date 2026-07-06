@@ -1,1 +1,27 @@
-{% extends 'base.html' %}{% block title %}{{ title }}{% endblock %}{% block content %}<div class="card form-card"><h1>{{ title }}</h1><p>{{ description }}</p><p><a class="btn btn-secondary" href="{{ template_url }}">ดาวน์โหลดไฟล์ตัวอย่าง Excel</a></p><form method="post" enctype="multipart/form-data"><label>เลือกไฟล์ .xlsx</label><input type="file" name="excel_file" accept=".xlsx" required><button>นำเข้าข้อมูล</button></form></div>{% endblock %}
+{% extends 'base.html' %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<div class="card form-card">
+  <h1>{{ title }}</h1>
+  <p>{{ description }}</p>
+  <p><a class="btn btn-secondary" href="{{ template_url }}">ดาวน์โหลดไฟล์ตัวอย่าง Excel</a></p>
+  <form method="post" enctype="multipart/form-data">
+    <label>เลือกไฟล์ .xlsx</label>
+    <input type="file" name="excel_file" accept=".xlsx" required>
+
+    {% if allow_replace %}
+    <div class="card" style="margin:16px 0;padding:14px;border:1px solid #f3c36b;background:#fff8e8;">
+      <label style="display:flex;gap:10px;align-items:flex-start;font-weight:700;">
+        <input type="checkbox" name="replace_existing" value="1" style="width:auto;margin-top:4px;">
+        <span>อัปเดตรายชื่อแทนข้อมูลเดิมในงานนี้</span>
+      </label>
+      <p class="muted" style="margin:6px 0 0;">
+        ถ้าเลือกช่องนี้ ระบบจะตรวจไฟล์ก่อน ถ้าไฟล์ถูกต้องจึงลบรายชื่อสมัครเดิมทั้งหมดของงานนี้ แล้วนำเข้ารายชื่อจากไฟล์ใหม่แทนทันที
+      </p>
+    </div>
+    {% endif %}
+
+    <button onclick="{% if allow_replace %}return confirm('ยืนยันนำเข้าไฟล์นี้? หากติ๊กอัปเดตแทนข้อมูลเดิม ระบบจะลบรายชื่อเดิมของงานนี้ก่อนนำเข้าใหม่');{% endif %}">นำเข้าข้อมูล</button>
+  </form>
+</div>
+{% endblock %}

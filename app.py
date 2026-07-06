@@ -924,17 +924,42 @@ def _int_from_excel(value, default=None):
     except (TypeError,ValueError): return default
 
 
+def delete_tournament_registrations(conn, tournament_id):
+    """ลบรายชื่อสมัครเดิมทั้งหมดของงานแข่งขันนี้ ก่อนนำเข้าไฟล์ใหม่แบบแทนข้อมูลเดิม"""
+    rows = conn.execute('''
+        SELECT r.id
+        FROM registrations r
+        JOIN events e ON r.event_id = e.id
+        WHERE e.tournament_id = ?
+    ''', (tournament_id,)).fetchall()
+    ids = [row['id'] for row in rows]
+    if not ids:
+        return 0
+    marks = ','.join(['?'] * len(ids))
+    params = tuple(ids)
+    conn.execute(f'DELETE FROM certificates WHERE registration_id IN ({marks})', params)
+    conn.execute(f'DELETE FROM registration_members WHERE registration_id IN ({marks})', params)
+    conn.execute(f'DELETE FROM registrations WHERE id IN ({marks})', params)
+    return len(ids)
+
+
 @app.route('/admin/tournament/<int:tournament_id>/registration-import-all',methods=['GET','POST'])
 def import_registrations_all(tournament_id):
-    """Import รายชื่อจาก Excel ไฟล์เดียว แล้วแยกผู้สมัครเข้าทุกอีเวนต์อัตโนมัติ"""
+    """Import รายชื่อจาก Excel ไฟล์เดียว แล้วแยกผู้สมัครเข้าทุกอีเวนต์อัตโนมัติ
+
+    โหมดใหม่:
+    - เพิ่มต่อจากเดิม: ใช้เหมือนเดิม
+    - แทนข้อมูลเดิม: ตรวจไฟล์ก่อน ถ้าไม่มีปัญหาจึงลบรายชื่อเดิมของงานนี้และนำเข้าใหม่ทั้งหมด
+    """
     if not is_logged_in(): return redirect(url_for('login'))
     conn=get_db(); t=get_owned_tournament(conn,tournament_id)
     if not t: conn.close(); abort(404)
     events=conn.execute('SELECT * FROM events WHERE tournament_id=? ORDER BY id',(tournament_id,)).fetchall()
     if not events:
         conn.close(); flash('กรุณาสร้างอีเวนต์ก่อนนำเข้ารายชื่อรวม'); return redirect(url_for('manage_events',tournament_id=tournament_id))
-    errors=[]; imported=0; imported_by_event={}
+    errors=[]; imported=0; imported_by_event={}; deleted_count=0
     if request.method=='POST':
+        replace_existing = request.form.get('replace_existing') == '1'
         f=request.files.get('excel_file')
         if not f or not allowed_file(f.filename,EXCEL_EXTENSIONS):
             conn.close(); flash('กรุณาเลือกไฟล์ .xlsx'); return redirect(request.url)
@@ -943,7 +968,10 @@ def import_registrations_all(tournament_id):
             ws=wb['รายชื่อสมัครรวม'] if 'รายชื่อสมัครรวม' in wb.sheetnames else wb.active
         except Exception:
             conn.close(); flash('ไม่สามารถอ่านไฟล์ Excel ได้ กรุณาใช้ไฟล์ .xlsx ที่ดาวน์โหลดจากระบบ'); return redirect(request.url)
+
         by_id,by_name=_event_lookup_for_bulk_import(events)
+        event_map={int(e['id']):e for e in events}
+        records=[]
         for rowno,row in enumerate(ws.iter_rows(min_row=2,values_only=True),start=2):
             if not any(v not in (None,'') for v in row): continue
             vals=list(row)+['']*16
@@ -973,22 +1001,60 @@ def import_registrations_all(tournament_id):
                 errors.append(f'แถว {rowno}: กรุณากรอกผู้ติดต่อและเบอร์โทร'); continue
             if len(members)>count or not incomplete_import_allowed(e,team,members):
                 errors.append(f'แถว {rowno}: รายชื่อนักกีฬาไม่ถูกต้อง'); continue
-            is_complete=registration_is_complete(count,members)
-            full,wait=registration_capacity_state(e)
-            if full and not wait:
-                errors.append(f'แถว {rowno}: {event_display_name(e)} เต็มแล้ว'); continue
+            records.append({'rowno':rowno,'event_id':int(e['id']),'event':e,'event_name':event_display_name(e),'team_name':team,'affiliation':aff,'contact_name':contact,'phone':phone,'member_count':count,'members':members,'is_complete':registration_is_complete(count,members),'notes':str(vals[15] or '').strip()})
+
+        # ตรวจจำนวนรับสมัครแบบรวมทั้งไฟล์ก่อนบันทึกจริง
+        planned_active={}; planned_wait={}; accepted_records=[]
+        for record in records:
+            e=event_map.get(int(record['event_id']))
+            if not e:
+                errors.append(f"แถว {record['rowno']}: ไม่พบอีเวนต์"); continue
+            eid=int(e['id'])
+            if eid not in planned_active:
+                if replace_existing:
+                    planned_active[eid]=0; planned_wait[eid]=0
+                else:
+                    active_now=event_reg_count(eid)
+                    planned_active[eid]=active_now
+                    planned_wait[eid]=event_reg_count(eid,True)-active_now
+            has_limit=bool(e['has_limit'] and int(e['max_slots'] or 0)>0)
+            if not has_limit or planned_active[eid]<int(e['max_slots'] or 0):
+                record['is_waitlist']=0; planned_active[eid]+=1; accepted_records.append(record); continue
+            can_wait=bool(e['waitlist_enabled'] and (int(e['waitlist_limit'] or 0)<=0 or planned_wait[eid]<int(e['waitlist_limit'] or 0)))
+            if can_wait:
+                record['is_waitlist']=1; planned_wait[eid]+=1; accepted_records.append(record); continue
+            errors.append(f"แถว {record['rowno']}: {record['event_name']} เต็มแล้ว")
+
+        if replace_existing and errors:
+            conn.close()
+            errors.insert(0,'ยังไม่ได้ลบข้อมูลเดิม เพราะไฟล์ที่อัปโหลดยังพบปัญหา กรุณาแก้ไฟล์แล้วอัปโหลดใหม่')
+            return render_template('import_result.html',title='ผลตรวจไฟล์นำเข้ารายชื่อรวมทุกอีเวนต์',imported=0,errors=errors,event_summary=[],back_url=url_for('manage_events',tournament_id=tournament_id))
+
+        if replace_existing:
+            deleted_count=delete_tournament_registrations(conn,tournament_id)
+
+        c=conn.cursor()
+        for record in accepted_records:
+            e=record['event']
             code=unique_registration_code(conn)
-            rid=insert_returning_id(conn,'''INSERT INTO registrations(event_id,team_name,affiliation,contact_name,phone,notes,created_at,member_count,source,registration_code,status,is_waitlist,is_complete) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',(e['id'],team or None,aff or None,contact,phone,str(vals[15] or '').strip(),now(),count,'excel_all',code,'pending',1 if full and wait else 0,is_complete))
-            c=conn.cursor()
-            for m in members: c.execute('INSERT INTO registration_members(registration_id,member_name,member_idcard) VALUES(?,?,?)',(rid,*m))
+            rid=insert_returning_id(conn,'''INSERT INTO registrations(event_id,team_name,affiliation,contact_name,phone,notes,created_at,member_count,source,registration_code,status,is_waitlist,is_complete) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',(e['id'],record['team_name'] or None,record['affiliation'] or None,record['contact_name'],record['phone'],record['notes'],now(),record['member_count'],'excel_all_replace' if replace_existing else 'excel_all',code,'pending',record.get('is_waitlist',0),record['is_complete']))
+            for m in record['members']:
+                c.execute('INSERT INTO registration_members(registration_id,member_name,member_idcard) VALUES(?,?,?)',(rid,*m))
             imported+=1; imported_by_event[e['id']]=imported_by_event.get(e['id'],0)+1
-        conn.execute('INSERT INTO import_logs(tournament_id,import_type,filename,imported_count,error_count,created_at) VALUES(?,?,?,?,?,?)',(tournament_id,'registrations_all_events',secure_filename(f.filename),imported,len(errors),now()))
+
+        import_type='registrations_all_events_replace' if replace_existing else 'registrations_all_events'
+        conn.execute('INSERT INTO import_logs(tournament_id,import_type,filename,imported_count,error_count,created_at) VALUES(?,?,?,?,?,?)',(tournament_id,import_type,secure_filename(f.filename),imported,len(errors),now()))
         conn.commit(); conn.close()
-        event_summary=[f"{event_display_name(e)}: {imported_by_event[e['id']]} รายการ" for e in events if imported_by_event.get(e['id'])]
+        event_summary=[]
+        if replace_existing:
+            event_summary.append('โหมดนำเข้า: แทนข้อมูลเดิมในงานนี้')
+            event_summary.append(f'ลบข้อมูลเดิมก่อนนำเข้า: {deleted_count} รายการ')
+        else:
+            event_summary.append('โหมดนำเข้า: เพิ่มต่อจากข้อมูลเดิม')
+        event_summary += [f"{event_display_name(e)}: {imported_by_event[e['id']]} รายการ" for e in events if imported_by_event.get(e['id'])]
         return render_template('import_result.html',title='ผลนำเข้ารายชื่อรวมทุกอีเวนต์',imported=imported,errors=errors,event_summary=event_summary,back_url=url_for('manage_events',tournament_id=tournament_id))
     conn.close()
-    return render_template('import_excel.html',title='นำเข้ารายชื่อรวมทุกอีเวนต์',description=f'งานแข่งขัน: {t["title"]} — ใช้ Excel ไฟล์เดียว ระบบจะแยกรายชื่อเข้าทุกอีเวนต์ให้อัตโนมัติ',template_url=url_for('bulk_registration_template',tournament_id=tournament_id))
-
+    return render_template('import_excel.html',title='นำเข้ารายชื่อรวมทุกอีเวนต์',description=f'งานแข่งขัน: {t["title"]} — ใช้ Excel ไฟล์เดียว ระบบจะแยกรายชื่อเข้าทุกอีเวนต์ให้อัตโนมัติ',template_url=url_for('bulk_registration_template',tournament_id=tournament_id),allow_replace=True)
 
 def _public_tournament_and_events(tournament_id):
     conn=get_db()
